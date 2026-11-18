@@ -3,8 +3,8 @@
 NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从零实现一棵 NumPy 决策树，通过 `partial_fit` 接收数据批次，在缓冲达标时用整个缓冲区重训。
 
 - `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
-- `numcompute_stream/` 是 Assignment 2.2 的扩展包。第 1 阶段已实现数值 CSV 分批读取、目标列拆分和输入验证，并复用旧 CSV 读取器。
-- 决策树、缓冲重训、增量预处理和统计、流式指标、Pipeline、StreamTrainer、绘图，以及 2.2 的 demo 和 benchmark 仍待实现。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- `numcompute_stream/` 是 Assignment 2.2 的扩展包。已实现数值 CSV 分批读取、输入验证、Gini 分类树和缓冲重训。
+- 增量预处理和统计、流式指标、Pipeline、StreamTrainer、绘图，以及 2.2 的 demo 和 benchmark 仍待实现。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
 
 ## 运行与测试
 
@@ -25,12 +25,26 @@ finally:
 PY
 ```
 
+以下示例在缓冲区累积到四行后训练。预测概率按 `classes_` 排列，独立树要求有限的数值特征。
+
 ```sh
-# Assignment 2.2 数据入口测试
-conda run -n aiml python -B -m unittest discover -s tests -p test_stream_io.py -v
+conda run --no-capture-output -n aiml python -B - <<'PY'
+from numcompute_stream import DecisionTreeClassifier
+
+tree = DecisionTreeClassifier(buffer_size=4, max_depth=1)
+tree.partial_fit([[0], [1]], ["low", "low"])
+tree.partial_fit([[2], [3]], ["high", "high"])
+print(tree.predict([[0], [3]]).tolist())  # ['low', 'high']
+print(tree.classes_.tolist(), tree.predict_proba([[3]]).tolist())  # ['high', 'low'] [[1.0, 0.0]]
+PY
+```
+
+```sh
+# Assignment 2.2 数据入口和决策树测试
+conda run -n aiml python -B -m unittest discover -s tests -p 'test_stream_*.py' -v
 
 # Assignment 2.1 回归测试
-conda run -n aiml python -B -m pytest -p no:cacheprovider tests --ignore=tests/test_stream_io.py
+conda run -n aiml python -B -m pytest -p no:cacheprovider tests --ignore=tests/test_stream_io.py --ignore=tests/test_stream_tree.py
 
 # 两套测试一起运行
 conda run -n aiml python -B -m pytest -p no:cacheprovider tests

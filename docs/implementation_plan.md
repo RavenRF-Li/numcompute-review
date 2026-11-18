@@ -39,7 +39,7 @@
 | `__init__.py`、`_validation.py` | 前者导出主要组件。后者是私有的数组、整数、标签空间、概率与拟合状态检查。统一报告输入名、期望形状和实际形状。 |
 | `io.py` | 重新导出 `load_csv` 和 `iter_csv_chunks`。`iter_supervised_csv(path, *, target_col, chunk_size=1000, delimiter=",", skip_header=0)` 逐批返回 `(X, y)`，有序移出目标列，允许 Python 风格负索引。每个数据批至少两列，特征 NaN 保留，非有限标签或 Inf 特征报错。沿用旧数值读取器的默认精度，`X` 和 `y` 均为 float64。 |
 | `preprocessing.py` | `StandardScaler()`、`SimpleImputer(fill_value=0.0)` 和 `OneHotEncoder(handle_unknown="ignore")` 提供 `fit(X)`、`partial_fit(X_chunk)`、`transform(X)`；前两者输出 `(n,d)`，后者输出 `(n,p)`。Scaler 保存每列 count、mean、M2 和 scale；Imputer 保存每列观测计数和当前填补值；Encoder 保存只追加的类别映射及输出宽度。 `TabularPreprocessor(numeric_columns, categorical_columns, *, fill_value=0.0)` 按列分支，输出 `(n,d_num+p)`，支持相同接口及 `snapshot()`，列列表有序、互斥，合计至少一列。 |
-| `tree.py` | `DecisionTreeClassifier(max_depth=8, min_samples_split=2, max_features=None, buffer_size=128, random_state=0)`，使用 Gini。`fit(X,y)`、`partial_fit(X_chunk,y_chunk)` 返回 self。`predict(X)` 输出 `(n,)`，`predict_proba(X)` 输出 `(n,k)`，列 `j` 对应最近训练的 `classes_[j]`，每行总和为 1。叶概率为训练窗口内该叶的类频率。只读状态含 `is_fitted_`、`pending_samples_`、`retrain_count_` 和最近训练行数。 |
+| `tree.py` | **已实现。** `DecisionTreeClassifier(max_depth=8, min_samples_split=2, max_features=None, buffer_size=128, random_state=0)`，使用 Gini。`fit(X,y)`、`partial_fit(X_chunk,y_chunk)` 返回 self。`predict(X)` 输出 `(n,)`，`predict_proba(X)` 输出 `(n,k)`，列 `j` 对应最近训练的 `classes_[j]`，每行总和为 1。叶概率为训练窗口内该叶的类频率。只读状态含 `is_fitted_`、`pending_samples_`、`retrain_count_` 和 `last_train_samples_`。 |
 | `pipeline.py` | `Pipeline(steps)` 接收唯一命名的步骤和末端 `DecisionTreeClassifier`。中间允许一个自带 `snapshot()` 的增量预处理步骤（可组合数值和类别列），前后可接确定性、保行的无状态 `transform`，或仅用树。`fit`、`partial_fit`、`predict`、`predict_proba` 对外形状同树；`transform(X)` 返回当前已发布快照的 `(n,p)`。维护原始输入宽度、学习中的预处理状态、发布状态、原始样本缓冲和重训计数。 |
 | `stats.py` | `StreamingStats(*, bin_edges)` 使用一组各列共用且固定的严格递增边缘。`update_stats(X_chunk)` 和 `update(X_chunk)` 是同一累计入口。`result(q=0.5, *, ddof=0)` 返回 count、mean、var 各 `(d,)`，quantile 为 `(d,)` 或 `(len(q),d)`，histogram 为 `(d,b)`，edges 为 `(b+1,)`，另有各列 underflow/overflow。`reset()` 清状态，保留边缘配置。 |
 | `metrics.py` | `ClassificationMetrics(labels, *, pos_label=None, window_size=None, zero_division=0.0)`。`update(y_true_chunk,y_pred_chunk, *, y_proba=None)` 接收等长 `(n,)` 和可选的 `(n,k)`，概率列按配置的 `labels` 对齐。`result(*, rolling=False)` 返回样本数、准确率、逐类 precision/recall/F1、`(k,k)` 混淆矩阵、AUC 与有概率行数；给定 `pos_label` 时返回该类的精确 OvR AUC，省略时返回已定义 OvR AUC 的宏平均和逐类结果。`reset()` 清空累计和滚动状态。 |
@@ -52,7 +52,7 @@
 
 ### 树和流式时序
 
-1. `fit` 无视缓冲门槛，从全部当前输入训练一棵新树。独立树的 `partial_fit` 保存数值特征及标签，Pipeline 则保存原始特征及标签。两条入口共享一个内部缓冲调度和建树路径。Pipeline 只在缓冲触发时交付变换后的完整训练集用于构建候选树，末端树自身的公共 `partial_fit` 仍可独立工作。Pipeline 内维持一份缓冲。
+1. `fit` 无视缓冲门槛，从全部当前输入训练一棵新树。独立树的 `partial_fit` 保存数值特征及标签，达到门槛后调用与 `fit` 相同的建树路径。后续 Pipeline 可持有一份原始数据缓冲，在触发时对新候选树调用公开的 `fit`，并在 Pipeline 层记录重训版本和次数。独立树与 Pipeline 缓存的数据不同，本阶段将缓冲逻辑留在树内，避免为尚未实现的调用方设计通用调度器。
 2. 每次非空更新整块追加。总数 `>= buffer_size` 时，用所有已缓冲样本完整重训一次并清空，包含超出门槛的整批尾部。记录实际训练样本数。两次重训间继续用旧树。流结束保留不足门槛的待训练样本，以便同一 stream 继续；demo 和 benchmark 报告余量，初版不加自动 flush。
 3. 树未就绪时直接 `predict/predict_proba` 报错，`score_chunk` 给出 `warmup`、零评估行和 NaN 指标。`fit_chunk` 先按发布版本评估全批并暂存结果，再用本批学习，成功后提交指标与日志。即使当前批首次触发重训，整批仍属 warmup。启动批只增加训练样本计数。从下一批开始，指标分母只含真正预测过的样本。`score_chunk` 可重复调用，日志、模型和累计指标均不变。
 4. 候选树、累计预处理状态和快照先构建在独立状态，全部成功后一次替换。输入错误或候选构建失败时，保留旧快照、旧缓冲及计数，本批可重试一次且不会重复累计。仅在单线程使用下承诺该提交语义。
@@ -70,7 +70,7 @@
 - 根深度为 0；`max_depth=0`、纯节点、样本数小于 `min_samples_split`、无有效正增益或常量特征时出叶。每个候选特征排序，只在相邻不同值之间评估切分；以左组最大观测值作为阈值，按 `<=` 分左边，避免算 midpoint 的溢出和舍入。区间内新值按这个明确的阈值规则路由。
 - 每个候选特征用类计数前缀和、广播及向量化 Gini 计算所有合法候选。增益 `<= 1e-12` 视作无有效分裂；候选增益距全局最大值 `<= 1e-12` 时按最小特征索引、再按最小阈值决胜。预测票数相同时选排序后最前的类别。单一类别可训练，整棵树为叶时概率仍有效。
 - `max_features=None` 用全部列；正整数 `m` 要求 `1 <= m <= p`；浮点 `f` 要求 `0 < f <= 1`，每节点用 `ceil(f*p)` 列，`p` 为当前树的变换后宽度。在每个拟分裂节点无放回抽一次，遍历候选时按特征索引排序。显式 `random_state` 为非负整数，每次完整建树重新初始化 NumPy Generator，固定左后右的节点访问顺序；相同输入、种子、配置、NumPy 环境可复现。记录种子和版本。采样特征均无法分裂时直接使用叶节点。
-- 独立树拒绝非有限值；Pipeline 在数值分支填补 NaN。特征 Inf、标签 NaN/Inf 和非法类别值在更新前拒绝。所有数值路径复核 float64 转换与运算结果；矩估计和标准化检查已观测列的非有限状态，识别溢出时抛出带阶段信息的 `ValueError`，保留旧状态。方差使用 Welford/Chan 的中心矩，对舍入导致的微小负值截零，显著负值视为计算异常。极大有限输入若超出 float64 可计算范围，显式报错。
+- 独立树在特征转换成 float64 后拒绝 NaN、Inf 和转换溢出。极大整数特征可能因转换丢失精度；类别标签保留 NumPy dtype。Pipeline 计划在数值分支填补 NaN，在更新前拒绝特征 Inf、标签 NaN/Inf 和非法类别值。矩估计和标准化检查已观测列的非有限状态，识别溢出时抛出带阶段信息的 `ValueError`，保留旧状态。方差使用 Welford/Chan 的中心矩，对舍入导致的微小负值截零，显著负值视为计算异常。
 - 节点中候选特征逐个处理，先保存每列最大增益，再重算第一个满足平局容差的特征，选择最小合格阈值。单节点 `n` 行、`k` 类、`m` 个候选特征的时间约为 `O(m(n log n + nk))`，计数工作区约 `O(nk)`。建树用显式栈执行递归划分，逐特征处理及按节点批量预测路由保留循环。节点数据和形状依赖上一层划分，逐特征还可避免同时分配所有候选的计数数组。CSV、chunk 调度、类别映射、窗口驱逐与绘图允许必要循环；矩、掩码、计数、比较等数组运算使用 NumPy。
 
 ## 4. 统计、指标和内存
@@ -92,7 +92,7 @@
 | 顺序 | 实现与验证 |
 | --- | --- |
 | 1 | **已完成。** 建立包入口，实现本阶段需要的列索引、数值及维度验证适配和 CSV 包装，并验证 T01–T03。模型状态和重置契约在对应阶段实现。 |
-| 2 | 实现独立 Gini 树和共用缓冲调度，先验证叶概率、分裂、随机性、精确达标和整批越线。 |
+| 2 | **阶段 A 已完成。** 实现独立 Gini 树和阈值缓冲重训，验证叶概率、分裂、随机性、精确达标、整批越线与失败保护。 |
 | 3 | 复用 `RunningStats` 实现增量预处理和独立 StreamingStats；验证快照、NaN、统计与列顺序。 |
 | 4 | 在树及预处理之上接 Pipeline 的原始缓冲与成对发布，验证两次重训之间的坐标。 |
 | 5 | 实现指标累计、滚动和 AUC；在 Pipeline 和指标上接 StreamTrainer，验证无泄漏时序、失败重试与日志。 |
@@ -112,7 +112,13 @@
 /opt/homebrew/Caskroom/miniconda/base/envs/aiml/bin/python -B -m pytest -p no:cacheprovider tests --ignore=tests/test_stream_io.py
 ```
 
-T01–T03 共 **3 项通过**（0.012 s）。旧套件 **642 项通过，0 项失败，4 条原有 NumPy 配置输出警告**（0.59 s）。两条命令退出码均为 0。第 2–7 阶段待实施。
+T01–T03 共 **3 项通过**（0.012 s）。旧套件 **642 项通过，0 项失败，4 条原有 NumPy 配置输出警告**（0.59 s）。两条命令退出码均为 0。
+
+### 阶段 A 完成记录
+
+新增 `numcompute_stream/tree.py` 与 `tests/test_stream_tree.py`，扩展输入验证与包导出。候选阈值使用类别计数前缀和批量计算 Gini 增益，建树和预测均按节点遍历。训练成功后才发布树与类别并清空缓冲。未训练时直接预测报 `RuntimeError`，合法空增量不改变状态，已训练时零行推理返回正确形状。
+
+在同一 `aiml` 环境分别运行树测试 **22 项通过**、流式 I/O 测试 **3 项通过**、旧回归 **642 项通过**。全量合跑 **667 项通过，0 项失败**，仍有 4 条旧 NumPy 配置输出警告。树测试包括 T04–T22，以及重训失败重试、大整数标签和独立多类 Gini 参考计算，完整命令见 README。实施顺序第 3–7 项待执行。
 
 ## 6. 需求覆盖与待确认
 

@@ -1,8 +1,8 @@
 # NumCompute-Stream 测试计划
 
-以下是实现阶段的测试用例与预期，共 54 个单元或组件测试场景及 4 个交付验证场景。计划使用标准库 `unittest`、`unittest.mock`、`tempfile` 和 `numpy.testing`。数组以表中行顺序构造，`NaN` 表示 `np.nan`；一维数列作为特征时显式构造成单列二维数组。可手算的计数、标签及列顺序精确比较，浮点结果按事先约定的合理容差比较，NaN 使用 `isnan` 检查。
+主计划包含 54 个单元或组件测试场景及 4 个交付验证场景，另有阶段 A 的 3 个补充场景。测试使用标准库 `unittest`、`unittest.mock`、`tempfile` 和 `numpy.testing`。数组以表中行顺序构造，`NaN` 表示 `np.nan`，一维数列作为特征时显式构造成单列二维数组。可手算的计数、标签及列顺序精确比较，浮点结果按事先约定的合理容差比较，NaN 使用 `isnan` 检查。
 
-第 1 阶段已在 `tests/test_stream_io.py` 实现并运行 T01–T03。用现有 `aiml` 环境（Python 3.12.13、NumPy 2.5.2）执行 `python -B -m unittest discover -s tests -p test_stream_io.py -v`，3 项通过。使用 pytest 9.2.0 执行 `python -B -m pytest -p no:cacheprovider tests --ignore=tests/test_stream_io.py` 复跑旧套件，642 项通过、0 项失败、4 条原有 NumPy 配置输出警告。T04–T54 与 V01–V04 待实施。详见 [实施计划](implementation_plan.md)。
+第 1 阶段实现 T01–T03，阶段 A 实现 T04–T22 和下列补充场景 A01–A03。在现有 `aiml`（Python 3.12.13、NumPy 2.5.2、pytest 9.2.0）实测，`tests/test_stream_io.py` 有 3 项通过，`tests/test_stream_tree.py` 有 22 项通过，2.1 旧回归有 642 项通过、0 项失败和 4 条原有 NumPy 配置输出警告。T23–T54 与 V01–V04 待实施。详见 [实施计划](implementation_plan.md)。
 
 ## CSV 与公共输入契约
 
@@ -35,6 +35,14 @@
 | T20 | tree／fit 重置 | 已训练且缓冲有待训数据时，对行数少于门槛、标签仅为 `"new"` 的新数据调用 `fit`。 | 立即训练，新类空间仅含 `"new"`，待训数 0，计数重新从这次成功建树记为 1。 |
 | T21 | tree／非有限值 | 拟合正常树后，分别提交 NaN 特征、Inf 特征及 NaN 标签。 | 各抛 `ValueError`；每次拒绝都不改变待训数、已训练版本、类别和探针预测。 |
 | T22 | tree／缓冲所有权 | 达标前送入非连续 X、y 视图，调用后覆写其底层存储，再提交能触发训练的下一批。 | 训练使用第一批原值和标签，与用独立原值重放结果一致。调用本身不写入用户数组。 |
+
+**已通过** T04–T22，以及以下 3 项补充测试。
+
+| 编号 | 模块／功能 | 输入或操作 | 预期 |
+| --- | --- | --- | --- |
+| A01 | tree／建树失败与重试 | 有一棵已训练的树和一行待训数据，注入建树异常，分别调用 `fit` 和触发门槛的 `partial_fit`。解除异常后重试增量批。 | 两次失败均保留旧预测、类别、待训行与计数。重试时训练行数为 3，新批只计一次。 |
+| A02 | tree／跨批数据约束 | 缓冲一行后送入不同宽度或不同标签 dtype kind 的批次，再以相同 dtype 送入一个相邻的大整数标签。 | 错误批次不入缓冲；两个相邻 `uint64` 大整数标签保持可区分，修改 `classes_` 的返回数组不影响预测。 |
+| A03 | tree／独立多类分裂参考 | 有重复特征值的三类数据，逐个候选阈值用 Python 循环分组、数标签并算 Gini 增益。 | NumPy 候选阈值与参考逐项一致，增益在 `1e-14` 绝对容差内一致。 |
 
 ## 增量预处理、快照与 Pipeline
 

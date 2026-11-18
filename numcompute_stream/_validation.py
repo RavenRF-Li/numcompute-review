@@ -1,5 +1,7 @@
 """Shared input validation for NumCompute-Stream."""
 
+import numpy as np
+
 from numcompute._validation import integer
 from numcompute._validation import real_array as _real_array
 
@@ -12,9 +14,42 @@ def column_index(value, *, name, n_columns):
     return index % n_columns
 
 
-def numeric_array(values, *, name, ndim, allow_nan=False):
-    """Validate a nonempty real array and identify the input in errors."""
+def numeric_array(
+    values, *, name, ndim, allow_nan=False, nonempty=True, check_values=True
+):
+    """Validate a real array and identify the input in errors."""
     try:
-        return _real_array(values, ndim=ndim, allow_nan=allow_nan)
+        return _real_array(
+            values, ndim=ndim, allow_nan=allow_nan,
+            nonempty=nonempty, check_values=check_values,
+        )
     except (TypeError, ValueError) as exc:
         raise type(exc)(f"{name}: {exc}") from exc
+
+
+def feature_matrix(values, *, expected_width=None):
+    """Validate a two-dimensional matrix of finite float64 features."""
+    X = numeric_array(
+        values, name="X", ndim=2, nonempty=False, check_values=False
+    )
+    if X.shape[1] == 0:
+        raise ValueError("X must have at least one feature column")
+    if expected_width is not None and X.shape[1] != expected_width:
+        raise ValueError(f"X must have {expected_width} features, got shape {X.shape}")
+    with np.errstate(over="ignore"):
+        X = X.astype(np.float64, copy=False)
+    if not np.isfinite(X).all():
+        raise ValueError("X contains NaN, infinity or values outside the float64 range")
+    return X
+
+
+def label_vector(values):
+    """Validate a one-dimensional label array without coercing its dtype."""
+    y = np.asarray(values)
+    if y.ndim != 1:
+        raise ValueError(f"y must be 1-D, got shape {y.shape}")
+    if y.dtype.kind not in "biufUS":
+        raise TypeError("y must contain real numeric, boolean or string labels")
+    if y.dtype.kind == "f" and not np.isfinite(y).all():
+        raise ValueError("y contains NaN or infinite labels")
+    return y
