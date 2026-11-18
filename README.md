@@ -3,8 +3,8 @@
 NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从零实现一棵 NumPy 决策树，通过 `partial_fit` 接收数据批次，在缓冲达标时用整个缓冲区重训。
 
 - `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
-- `numcompute_stream/` 已实现数值 CSV 分批读取、Gini 树与缓冲重训、增量预处理、流式统计、Pipeline、分类指标和 StreamTrainer。
-- 绘图、2.2 demo、benchmark、报告和视频待完成。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- `numcompute_stream/` 已实现数值 CSV 分批读取、Gini 树与缓冲重训、增量预处理、流式统计、Pipeline、分类指标、StreamTrainer 和可视化。2.2 的 Notebook 与基准实验均已执行。
+- 2.2 的技术报告和视频留在阶段 E。`demo/quickstart.ipynb` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
 
 ## 运行与测试
 
@@ -92,6 +92,22 @@ conda run -n aiml python -B -m pytest -p no:cacheprovider tests --ignore-glob='t
 # 两套测试一起运行
 conda run -n aiml python -B -m pytest -p no:cacheprovider tests
 ```
+
+## Notebook、基准与安装验证
+
+已执行的 [stream_demo.ipynb](demo/stream_demo.ipynb) 按 CSV 原顺序重放 2,000 条合成观测，展示先评估后学习、warmup、缓冲重训、滚动指标和分批统计。数据生成规则见 [CSV 数据说明](demo/data/README.md)。
+
+在仓库根目录运行以下命令。Notebook 执行器使用现有 `aiml` Jupyter kernel 和本地 IPC，受限环境需要允许本地套接字。本机的 `aiml` 已提供 `jupyter_client`、`ipykernel` 和 `matplotlib_inline`，供执行 Notebook 使用。
+
+```sh
+conda run -n aiml python -B -m demo.execute_stream_notebook
+conda run -n aiml python -B -m benchmark.run_stream
+conda run -n aiml python -B -m demo.check_stream_install
+```
+
+- Notebook 保留实际输出，PNG 可单独查看。[累计准确率](demo/figures/stream_metric.png)、[共同批次模型比较](demo/figures/stream_compare.png)、[预测对照](demo/figures/stream_predictions.png)
+- 基准命令会输出计时表和 JSON。循环与 NumPy 在计时前核对候选阈值和 Gini 增益。三个 buffer 使用共同可评估批次比较准确率，整体时间包含评分、精确 AUC 和内存日志。[实测 JSON](benchmark/stream_results.json)
+- 安装检查离线构建 wheel，安装到临时 venv 并从仓库外导入两个包，运行训练与 Agg 绘图。临时 venv 复用 `aiml` 的 NumPy 和 matplotlib。
 
 ## 规划与归档
 

@@ -30,7 +30,7 @@
 
 ## 2. 包结构与接口
 
-保留 `numcompute/`，在同一发行包内加入 `numcompute_stream/`。现有 setuptools discovery 的 `include = ["numcompute*"]` 匹配两个包，使用带 `__init__.py` 的普通包即可。实现阶段在个人分支补元数据和 matplotlib 依赖，核心仅用标准库、NumPy，绘图模块用 matplotlib；顶层导入不提前加载 pyplot。保留现有 NumPy/Python 版本约束，核验 matplotlib 版本下限与支持矩阵。后续先验证 editable install，再构建并在独立环境安装 wheel，从仓库外导入两个包并运行最小流式示例。跨包复用随同一 wheel 分发。
+同一发行包保留 `numcompute/` 并包含 `numcompute_stream/`。setuptools discovery 的 `include = ["numcompute*"]` 匹配两个包。运行依赖声明为 `numpy>=1.24` 和 `matplotlib>=3.6`，核心使用标准库和 NumPy，显式导入绘图模块时才加载 pyplot。已在临时 venv 中离线安装 wheel，从仓库外运行导入、训练和绘图。依赖继承自 `aiml`，实际测试版本见阶段 D 记录。
 
 以下接口为**建议设计**。由 2.2 specs 指定的模块、方法和交付物见第 6 节。
 
@@ -44,7 +44,7 @@
 | `stats.py` | **已实现。** `StreamingStats(*, bin_edges)` 使用一组各列共用且固定的严格递增边缘。`update_stats(X_chunk)` 和 `update(X_chunk)` 是同一累计入口。`result(q=0.5, *, ddof=0)` 返回 count、mean、var 各 `(d,)`，quantile 为 `(d,)` 或 `(len(q),d)`，histogram 为 `(d,b)`，edges 为 `(b+1,)`，另有各列 underflow/overflow。`reset()` 清状态，保留边缘配置。有首个非空批之后才可查询结果。 |
 | `metrics.py` | **已实现。** `ClassificationMetrics(labels, *, pos_label=None, window_size=None, zero_division=0.0)`。`update(y_true_chunk,y_pred_chunk, *, y_proba=None)` 接收等长 `(n,)` 和可选的 `(n,k)`，概率列按 `labels_` 对齐，行和的绝对容差为 `1e-6`。`result(*, rolling=False)` 返回 `n_samples`、`n_scored`、`accuracy`、逐类 `precision/recall/f1`、`(k,k)` 的 `confusion_matrix`、`auc` 和 `auc_per_class`。给定 `pos_label` 时只计算该类的精确 OvR AUC，否则对已定义类作宏平均。滚动查询要求配置窗口。`reset()` 清空数据。 |
 | `stream.py` | **已实现。** `StreamTrainer(pipeline, *, labels, pos_label=None, window_size=None)`。`score_chunk(X,y)` 返回批状态、已评估数和版本、`metrics` 及 `y_pred (n,)`、对齐后的 `y_proba (n,k)`；warmup 无评估行，accuracy 与 AUC 为 NaN。`fit_chunk(X,y)` 先评估再学习，成功时附加 `log` 摘要并写入 `logs`。空批的 `log` 为 None。`reset()` 清空 Pipeline、累计指标与日志。 |
-| `visualise.py` | `plot_metric_over_time(metric_values,title,ylabel)` 接收一维时间序列，NaN 表示缺点；`compare_models(metric1,metric2,labels)` 接收等长序列与两个模型名；`plot_predictions_vs_ground_truth(y_true,y_pred)` 接收等长一维标签，共用离散类刻度。都附加仅限关键字的 `save_path=None, show=False`，返回 `(Figure, Axes)`；调用方可选择保存、显示，并负责关闭 Figure。 |
+| `visualise.py` | **已实现。** `plot_metric_over_time(metric_values,title,ylabel)` 接收一维时间序列，NaN 保留空点。`compare_models(metric1,metric2,labels)` 接收等长序列与两个模型名。`plot_predictions_vs_ground_truth(y_true,y_pred)` 接收等长一维标签，真值和预测共用离散刻度。三个函数接受关键字 `save_path=None, show=False` 并返回 `(Figure, Axes)`，由调用方负责关闭 Figure。 |
 
 **形状与状态约定。** 输入一律为二维 `X=(n_samples,n_features)`、一维 `y=(n_samples,)`，不自动重排单样本或压平 `(n,1)`。统计和预处理沿 `axis=0` 按列累计，变换保留行数。数值路径接受实数 array-like 并转换成 float64，拒绝不支持的 dtype；独立 Encoder 可接收同一 dtype kind 的文本或有限实数，表格组合器用数值类别码。标签采用同一 dtype kind 的有限实数、布尔或字符串，可在同一 kind 内扩大位宽，避免字符串截断和跨 signed/unsigned 强制合成 float64。字段类型错误用 `TypeError`，形状、宽度、非法值和参数范围用 `ValueError`，未发布模型的直接推理用 `RuntimeError`。更新首先验证配置、数组、宽度和数值；接受宽度匹配的零行更新作为 no-op，首次零行更新不固定宽度。批量 `fit` 要求非空，成功时以输入重新拟合并重置旧统计、类别、缓冲、重训计数和 RNG；已拟合后的零行预测返回形状正确的空数组。方法不改写调用方数组，需保留的批次使用独立副本。
 
@@ -91,11 +91,11 @@
 
 ## 5. Benchmark、demo 与实施顺序
 
-**循环与向量化。** 复用旧 harness，新写独立纯 Python Gini 候选循环，以相同节点数据、标签、dtype、阈值集合和决胜规则比较生产 kernel。两者接收相同已准备的节点输入，均包含排序与候选计分和选择；数据生成、正确性检查、绘图和 I/O 放在计时外。先对照独立手算/循环和完整结果（候选分数容差、分裂特征、阈值及左右行），再用同一 warmup、重复次数和交替顺序测 `perf_counter_ns`，记录中位数、离散程度、每次样本及环境。
+**循环与向量化。** `benchmark.run_stream` 复用旧 harness 比较生产 `_candidate_gains` 与独立 Python 循环。输入相同，计时包括单特征排序和所有候选计分。计时前核对全部阈值、增益及最优阈值分区。数据生成、选择检查、I/O 和绘图均在计时外。每个实现预热 2 次，测 7 组各 5 次，交替执行顺序。JSON 记录原始样本、最小值、中位数、最大值与环境。本实验的耗时范围为单特征候选 kernel。
 
-**Buffer sweep。** 多个 `buffer_size` 使用同一不可变数据和 chunk 边界、预处理和树配置、种子及预序列协议。所有运行学习完整流，用各运行都已能预测的共同批次比较主要 accuracy 和 AUC，并报告各自从何时开始预测、覆盖率、全可评估段 accuracy 及各批指标。分开计（1）重训路径，从拼接缓冲、冻结快照及全缓冲变换到建树发布，（2）每批学习路径，（3）推理与评估；磁盘、绘图和日志序列化在外。记录重训次数、实际每次训练行数、单次重训时间分布和累计时间、最后余量及批末内存估计。零次重训时重训时长分位数记缺失；没有共同评估批次就报告缺失并调整实验流长度。用同一环境做独立重复，发布实测 JSON 和可重现脚本，结果注明 seed、数据来源/生成参数、平台、依赖与代码版本。测试不对速度设阈值。
+**Buffer sweep。** 64、128、256 使用相同的有序 CSV、32 行 chunks、预处理、树参数、滚动窗口和种子。三个模型在所有共同可评估批次上比较按样本累计的 accuracy，并记录各自全可评估段的 accuracy、覆盖率、首次评分批次、训练行数和待训尾部。每个模型预热 1 次，测 3 次，每次轮换运行顺序并核对结果一致。分开记录 `tree_fit_s`、`retrain_s` 和 `overall_s`。整体时间含新建 Trainer、评分、在线更新、AUC 查询及内存日志。CSV 读取、绘图和实验结果序列化在计时外。AUC 在 notebook 展示，sweep 的共同批次比较使用 accuracy。速度只作为测量结果记录。
 
-**Demo。** `demo/stream_demo.ipynb` 从 `numcompute_stream.io.iter_supervised_csv` 读入 CSV 并按 chunk 模拟有序数据流，预先声明标签词表。配置 Pipeline 与 StreamTrainer；循环调用 `fit_chunk`，其内部调用 `pipeline.partial_fit`。可独立用 `update_stats` 展示跨批统计。呈现 warmup、重训、累计与滚动记录、流尾余量，再用 `visualise.py` 绘制时间序列和预测对照；预测对照仅收集学习前的真值与预测。预留可运行的 headless 验证路径及交互显示。
+**Demo。** `demo/stream_workflow.py` 为 Notebook 和 benchmark 配置相同的 Pipeline 与 StreamTrainer，并从 `numcompute_stream.io.iter_supervised_csv` 读取原序 chunks。`fit_chunk` 先评分，再调用 `pipeline.partial_fit`。Notebook 用独立 `StreamingStats` 统计两个原始数值列，展示三类图和学习前预测。64 与 256 的比较图使用两个真实运行及同一个共同批次掩码。数据和生成规则见 [CSV 数据说明](../demo/data/README.md)。
 
 | 顺序 | 实现与验证 |
 | --- | --- |
@@ -104,8 +104,8 @@
 | 3 | **阶段 B 已完成。** 复用 `RunningStats` 实现增量预处理和独立 StreamingStats，验证快照、NaN、统计与列顺序。 |
 | 4 | **阶段 C 已完成。** 在树及预处理之上接 Pipeline 的原始缓冲与成对发布，验证两次重训之间的坐标。 |
 | 5 | **阶段 C 已完成。** 实现指标累计、滚动和 AUC，接入 Trainer 并验证先评估后学习、失败重试与日志。 |
-| 6 | 接绘图与 demo，新增两个 benchmark 入口并实际测量；运行旧套件与 2.2 测试，验证安装。 |
-| 7 | 更新 README，完成最多 4 页 PDF 技术报告及最多 5 分钟视频；在个人 fork 的个人分支整理提交并核对默认分支保留原始小组代码。 |
+| 6 | **阶段 D 已完成。** 执行绘图、Notebook 和两类 benchmark，验证旧套件、2.2 测试与离线 wheel。 |
+| 7 | **阶段 E 待完成。** 用实际输出完成最多 4 页 PDF 技术报告及最多 5 分钟视频。核对 fork 上游与最终提交形式。 |
 
 ### 第 1 阶段完成记录
 
@@ -136,7 +136,30 @@ T01–T03 共 **3 项通过**（0.012 s）。旧套件 **642 项通过，0 项�
 
 ### 阶段 C 完成记录
 
-新增 `pipeline.py`、`metrics.py`、`stream.py` 和三个对应测试文件。对已训练批只调用一次概率预测，并按树类别顺序选出预测，同步映射到配置词表。独立树实现保持原样。全量套件 **704 项通过、0 项失败**，其中阶段 C 21 项（Pipeline 8、指标 7、Trainer 6）、既有 2.2 测试 41 项、2.1 回归 642 项。4 条原有 NumPy 配置输出警告。阶段 D 的绘图、demo、benchmark 和最终交付验证待执行。
+新增 `pipeline.py`、`metrics.py`、`stream.py` 和三个对应测试文件。对已训练批只调用一次概率预测，并按树类别顺序选出预测，同步映射到配置词表。独立树实现保持原样。全量套件 **704 项通过、0 项失败**，其中阶段 C 21 项（Pipeline 8、指标 7、Trainer 6）、既有 2.2 测试 41 项、2.1 回归 642 项。4 条原有 NumPy 配置输出警告。
+
+### 阶段 D 完成记录
+
+现有 `aiml` 环境使用 Python 3.12.13、NumPy 2.5.2、matplotlib 3.11.1。在获得本地 IPC 权限后，执行器用实际 `aiml` Jupyter kernel 运行了 [Notebook](../demo/stream_demo.ipynb) 的 5 个代码单元，保存 3 个嵌入图及相应 PNG。64 行 buffer 的 Notebook 输出包含 31 次重训、16 行待训、1,936 条学习前预测，累计 accuracy 约 0.780、AUC 约 0.816。合成 CSV 用固定种子再生成后逐字节一致。
+
+轮子检查用 `pip wheel --no-index --no-deps --no-build-isolation` 从临时源码副本构建 `numcompute-0.1.0-py3-none-any.whl`，离线装入临时 venv。仓库外通过 wheel 导入两包，核对依赖声明，并通过流式训练、预测和 Agg PNG 检查。全量测试 **709 项通过、0 项失败**，其中 2.1 回归 642 项，2.2 测试 67 项（阶段 D 新增 5 项），另有 4 条既有 NumPy 配置输出警告。README 保留可重跑命令。
+
+#### 可引用的实测结果
+
+以下为 2026 年 11 月 18 日在 macOS arm64 的 `aiml` 环境、种子 2026 下的中位数。分裂实验的阈值、增益及最优分区检查均通过。未取整数值、原始重复样本、数据 SHA-256 和运行时代码哈希见 [stream_results.json](../benchmark/stream_results.json)。
+
+| 单特征候选行数 | 候选阈值数 | NumPy／µs | Python 循环／µs | 循环除以 NumPy |
+| --- | ---: | ---: | ---: | ---: |
+| 256 | 181 | 32.01 | 242.57 | 7.58× |
+| 2,048 | 454 | 127.59 | 1,003.99 | 7.87× |
+
+| Buffer | 首次评分批 | 覆盖率 | 共同准确率 | 重训次数 | 待训行 | Tree fit／s | Retrain／s | Overall／s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 | 3 | 96.80% | 77.81% | 31 | 16 | 0.0302 | 0.0313 | 0.0639 |
+| 128 | 5 | 93.60% | 79.36% | 15 | 80 | 0.0226 | 0.0232 | 0.0561 |
+| 256 | 9 | 87.20% | 76.43% | 7 | 208 | 0.0147 | 0.0150 | 0.0475 |
+
+共同评估为第 9–63 批的 1,744 行。128 的准确率在这次共同评估上最高，256 的整体时间最短且评估覆盖率最低。测量只反映此合成数据、硬件与计时范围。阶段 E 可引用这两张表、Notebook 输出和三张 PNG。PDF 和视频尚未交付。
 
 ## 6. 需求覆盖与待确认
 
