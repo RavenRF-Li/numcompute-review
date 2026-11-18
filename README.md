@@ -3,8 +3,8 @@
 NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从零实现一棵 NumPy 决策树，通过 `partial_fit` 接收数据批次，在缓冲达标时用整个缓冲区重训。
 
 - `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
-- `numcompute_stream/` 是 Assignment 2.2 的扩展包。已实现数值 CSV 分批读取、输入验证、Gini 分类树、缓冲重训、增量预处理和流式统计。
-- 流式指标、Pipeline、StreamTrainer、绘图，以及 2.2 的 demo 和 benchmark 仍待实现。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- `numcompute_stream/` 已实现数值 CSV 分批读取、Gini 树与缓冲重训、增量预处理、流式统计、Pipeline、分类指标和 StreamTrainer。
+- 绘图、2.2 demo、benchmark、报告和视频待完成。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
 
 ## 运行与测试
 
@@ -55,6 +55,32 @@ PY
 ```
 
 `StreamingStats(bin_edges=...)` 按列累计均值、方差和固定箱直方图，通过 `result(q=0.5)` 查询精确分位数。精确分位数保留历史样本，内存随累计行数增长。
+
+以下流先用旧模型评估每批，再学习当前批。第二批同时带来数值 NaN 和新类别，第三批触发第二次重训。
+
+```sh
+conda run --no-capture-output -n aiml python -B - <<'PY'
+from numcompute_stream import DecisionTreeClassifier, Pipeline, StreamTrainer, TabularPreprocessor
+
+pipe = Pipeline([
+    ("prep", TabularPreprocessor([0], [1])),
+    ("tree", DecisionTreeClassifier(buffer_size=2)),
+])
+trainer = StreamTrainer(pipe, labels=[0, 1], pos_label=1, window_size=2)
+for X, y in [
+    ([[0, 1], [2, 1]], [0, 1]),
+    ([[float("nan"), 2]], [1]),
+    ([[4, 2]], [0]),
+]:
+    row = trainer.fit_chunk(X, y)["log"]
+    print(row["status"], row["retrain_count"], row["pending_samples"])
+# warmup 1 0
+# scored 1 1
+# scored 2 0
+PY
+```
+
+Pipeline 支持裸树、一个 `StandardScaler` 或 `TabularPreprocessor` 接树，以及前后逐行独立的保行无状态变换。含 NaN 的原始数据用组合器填补。Trainer 只将已经预测的样本纳入累计与滚动指标，`score_chunk` 只评分。日志保存标量摘要，`trainer.metrics.result()` 返回完整混淆矩阵和逐类结果。精确累计 AUC 保留历史分数并在查询时排序。日志分别记录预处理、tree fit、重训、整体更新和评估耗时，内存字段估算当前保留的 NumPy 数组存储。
 
 ```sh
 # Assignment 2.2 当前全部测试

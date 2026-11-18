@@ -82,6 +82,9 @@ class StandardScaler:
     """
 
     def __init__(self):
+        self._reset()
+
+    def _reset(self):
         self._moments = None
 
     @property
@@ -331,6 +334,9 @@ class TabularPreprocessor:
             raise ValueError("Specify at least one column and select each column only once")
         self._max_column = max(columns)
         self._fill_value = _validate_fill_value(fill_value)
+        self._reset()
+
+    def _reset(self):
         self._width = None
         self._moments = None
         self._encoding = None

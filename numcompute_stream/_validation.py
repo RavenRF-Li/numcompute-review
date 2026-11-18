@@ -51,13 +51,13 @@ def feature_matrix(values, *, expected_width=None, allow_nan=False):
     return X
 
 
-def label_vector(values):
+def label_vector(values, *, name="y"):
     """Validate a one-dimensional label array without coercing its dtype."""
     y = np.asarray(values)
     if y.ndim != 1:
-        raise ValueError(f"y must be 1-D, got shape {y.shape}")
+        raise ValueError(f"{name} must be 1-D, got shape {y.shape}")
     if y.dtype.kind not in "biufUS":
-        raise TypeError("y must contain real numeric, boolean or string labels")
+        raise TypeError(f"{name} must contain real numeric, boolean or string labels")
     if y.dtype.kind == "f" and not np.isfinite(y).all():
-        raise ValueError("y contains NaN or infinite labels")
+        raise ValueError(f"{name} contains NaN or infinite labels")
     return y

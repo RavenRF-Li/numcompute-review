@@ -22,7 +22,7 @@
 | 数值预处理 | `numcompute/preprocessing.py` 的 `StandardScaler.fit` 用 `nanmean/nanstd` 重算整批，常量列使用 scale 1。`SimpleImputer.fit` 支持 mean、median、constant。两者的统计拟合均拒绝全 NaN 列。`MinMaxScaler` 也是批量拟合。 | **改造后复用**标准化及 `np.where` 填补公式，原有类保留。新类用 `RunningStats` 累计，均值填补支持全缺失列的 fallback。`MinMaxScaler` 及 median 填补留在旧包。 |
 | 编码 | 同文件 `OneHotEncoder.fit` 对 `(feature, category)` 去重排序，按原列分组；`transform` 使用广播匹配和 `logical_or.reduceat` 检查未知类别。再次拟合可能移动既有列。`tests/test_io_preprocessing.py` 重复声明同名 `TestOneHotEncoder`，Python 只保留后一次定义供收集。 | **改造后复用**向量化匹配思路，**新增**全局只追加的列映射，未知检查按原列聚合。把跨批列稳定性纳入新测试。 |
 | 统计 | `numcompute/stats.py` 的 `RunningStats.update/merge/copy` 已支持分批矩估计和 NaN 策略。现有 `histogram` 展平后单次计数，`quantile` 对传入数组单次归约。 `tests/test_stats_metrics.py` 对比不等长分批与批量矩，并覆盖 merge；`tests/test_stats_metrics_edges.py` 有方差精度边界。 | **直接复用** `RunningStats` 的累计计算与 `quantile` 的精确归约。**新增** `update_stats`、按列调用同一 NumPy 直方图 kernel 及分位数样本管理。固定边缘在构造时统一验证。 |
-| 指标 | `numcompute/metrics.py` 中 `confusion_matrix` 支持显式标签顺序，内部用 `bincount`；accuracy、precision、recall、F1 均从输入批计算。`roc_auc_score` 是精确二分类，合并同分，单一真实类别会报错。现有测试覆盖顺序、平局和未定义的分母。 | **直接复用**显式标签顺序的混淆矩阵和二分类 AUC kernel。**新增**累加和逐样本 rolling window，基于累计计数算比率，以 OvR 方式复用 AUC。 |
+| 指标 | `numcompute/metrics.py` 中 `confusion_matrix` 支持显式标签顺序，内部用 `bincount`；accuracy、precision、recall、F1 均从输入批计算。`roc_auc_score` 是精确二分类，合并同分，单一真实类别会报错。现有测试覆盖顺序、平局和未定义的分母。 | **复用**二分类 AUC 和 `bincount` 计数方式。流式层先按固定词表给不同标签编码，再对编码对计数，实际使用同一段计数逻辑计算入窗批和驱逐行。基于累计计数算比率，以 OvR 方式复用 AUC。 |
 | Pipeline | `numcompute/pipeline.py` 的 `Transformer`、`Estimator`、`Pipeline.fit/predict`、`FeatureUnion.fit/transform` 定义命名、保行和复制语义。旧步骤原地拟合，没有 `partial_fit` 或快照。`tests/test_pipeline.py` 和 `tests/test_optim_pipeline_utils.py` 用替身测试组合。 | **新增**流式 Pipeline。沿用命名步骤、保行与输入保护约定，避免继承旧类的就地拟合与状态。可复用旧 `numcompute/utils.py:iter_batches` 生成内存中的 demo/benchmark 切片。 |
 | 输入验证 | `numcompute/_validation.py` 的 `real_array` 检查实数、维数、NaN/Inf，`matrix` 检查二维并转 float64，`integer` 拒绝布尔整数；`fitted` 的检查绑定旧 transformer 的属性。旧 Pipeline 自有 `_matrix` 并把宽度决定权交给步骤。 | **直接复用**基础数值与整数检查，通过新包内部适配层集中旧私有导入。**新增**带参数名的错误、类别 dtype、行数匹配、宽度、转换后溢出与各阶段状态验证。 |
 | Benchmark | `numcompute/benchmarking.py` 的 `BenchmarkCase`、`run_benchmarks` 支持检查双方输出、预热、交替顺序和环境记录。`benchmark/run.py` 有 `_loop_welford`、`_loop_histogram` 等旧负载，默认写旧 `benchmark/results.json`。现有 harness 测试含模拟时钟和正确性失败路径。 | **直接复用** harness。**新增**候选分裂的独立循环对照、buffer sweep 驱动及单独的真实测量输出。旧结果文件只作为 2.1 记录。 |
@@ -40,10 +40,10 @@
 | `io.py` | 重新导出 `load_csv` 和 `iter_csv_chunks`。`iter_supervised_csv(path, *, target_col, chunk_size=1000, delimiter=",", skip_header=0)` 逐批返回 `(X, y)`，有序移出目标列，允许 Python 风格负索引。每个数据批至少两列，特征 NaN 保留，非有限标签或 Inf 特征报错。沿用旧数值读取器的默认精度，`X` 和 `y` 均为 float64。 |
 | `preprocessing.py` | **已实现。** `StandardScaler()`、`SimpleImputer(fill_value=0.0)`、`OneHotEncoder(handle_unknown="ignore")` 和 `TabularPreprocessor(numeric_columns, categorical_columns, *, fill_value=0.0)` 提供 `fit(X)`、`partial_fit(X_chunk)`、`transform(X)`。前两者输出 `(n,d)`，Encoder 输出 `(n,p)`，组合器输出 `(n,d_num+p)`。数值累计状态为每列 count、mean 和 M2，scale 和填补值从状态计算。Encoder 只追加类别列。Scaler 和组合器提供 `snapshot()`；组合器的列索引为有序、互斥的非负整数，至少选一列。 |
 | `tree.py` | **已实现。** `DecisionTreeClassifier(max_depth=8, min_samples_split=2, max_features=None, buffer_size=128, random_state=0)`，使用 Gini。`fit(X,y)`、`partial_fit(X_chunk,y_chunk)` 返回 self。`predict(X)` 输出 `(n,)`，`predict_proba(X)` 输出 `(n,k)`，列 `j` 对应最近训练的 `classes_[j]`，每行总和为 1。叶概率为训练窗口内该叶的类频率。只读状态含 `is_fitted_`、`pending_samples_`、`retrain_count_` 和 `last_train_samples_`。 |
-| `pipeline.py` | `Pipeline(steps)` 接收唯一命名的步骤和末端 `DecisionTreeClassifier`。中间允许一个自带 `snapshot()` 的增量预处理步骤（可组合数值和类别列），前后可接确定性、保行的无状态 `transform`，或仅用树。`fit`、`partial_fit`、`predict`、`predict_proba` 对外形状同树；`transform(X)` 返回当前已发布快照的 `(n,p)`。维护原始输入宽度、学习中的预处理状态、发布状态、原始样本缓冲和重训计数。 |
+| `pipeline.py` | **已实现。** `Pipeline(steps)` 接收唯一命名的步骤和末端 `DecisionTreeClassifier`。支持裸树，或一个 `StandardScaler` / `TabularPreprocessor`，前后可串联确定性、逐行独立且保行的无状态 `transform`。增量步骤和树是配置模板，Pipeline 不改写调用方实例。`fit`、`partial_fit`、`predict`、`predict_proba` 形状同树；`transform(X)` 返回发布变换的 `(n,p)`。提供 `reset()`、`is_fitted_`、`classes_`、`pending_samples_`、`retrain_count_`、`last_train_samples_` 和 `last_timing_`。 |
 | `stats.py` | **已实现。** `StreamingStats(*, bin_edges)` 使用一组各列共用且固定的严格递增边缘。`update_stats(X_chunk)` 和 `update(X_chunk)` 是同一累计入口。`result(q=0.5, *, ddof=0)` 返回 count、mean、var 各 `(d,)`，quantile 为 `(d,)` 或 `(len(q),d)`，histogram 为 `(d,b)`，edges 为 `(b+1,)`，另有各列 underflow/overflow。`reset()` 清状态，保留边缘配置。有首个非空批之后才可查询结果。 |
-| `metrics.py` | `ClassificationMetrics(labels, *, pos_label=None, window_size=None, zero_division=0.0)`。`update(y_true_chunk,y_pred_chunk, *, y_proba=None)` 接收等长 `(n,)` 和可选的 `(n,k)`，概率列按配置的 `labels` 对齐。`result(*, rolling=False)` 返回样本数、准确率、逐类 precision/recall/F1、`(k,k)` 混淆矩阵、AUC 与有概率行数；给定 `pos_label` 时返回该类的精确 OvR AUC，省略时返回已定义 OvR AUC 的宏平均和逐类结果。`reset()` 清空累计和滚动状态。 |
-| `stream.py` | `StreamTrainer(pipeline, *, labels, pos_label=None, window_size=None)`。`score_chunk(X,y)` 纯评估并返回批指标及本批预测数组（标签 `(n,)`、对齐概率 `(n,k)`），启动时返回 warmup、NaN 及零行预测。`fit_chunk(X,y)` 执行先评估后学习，返回评估结果与含本批/累计/滚动指标、样本数、评估和发布版本、重训时间及内存的摘要。日志仅保留摘要，调用方可用本批返回的预测作图。空批返回空结果，不记日志；`reset()` 恢复未训练状态并清空指标和日志，保留配置。 |
+| `metrics.py` | **已实现。** `ClassificationMetrics(labels, *, pos_label=None, window_size=None, zero_division=0.0)`。`update(y_true_chunk,y_pred_chunk, *, y_proba=None)` 接收等长 `(n,)` 和可选的 `(n,k)`，概率列按 `labels_` 对齐，行和的绝对容差为 `1e-6`。`result(*, rolling=False)` 返回 `n_samples`、`n_scored`、`accuracy`、逐类 `precision/recall/f1`、`(k,k)` 的 `confusion_matrix`、`auc` 和 `auc_per_class`。给定 `pos_label` 时只计算该类的精确 OvR AUC，否则对已定义类作宏平均。滚动查询要求配置窗口。`reset()` 清空数据。 |
+| `stream.py` | **已实现。** `StreamTrainer(pipeline, *, labels, pos_label=None, window_size=None)`。`score_chunk(X,y)` 返回批状态、已评估数和版本、`metrics` 及 `y_pred (n,)`、对齐后的 `y_proba (n,k)`；warmup 无评估行，accuracy 与 AUC 为 NaN。`fit_chunk(X,y)` 先评估再学习，成功时附加 `log` 摘要并写入 `logs`。空批的 `log` 为 None。`reset()` 清空 Pipeline、累计指标与日志。 |
 | `visualise.py` | `plot_metric_over_time(metric_values,title,ylabel)` 接收一维时间序列，NaN 表示缺点；`compare_models(metric1,metric2,labels)` 接收等长序列与两个模型名；`plot_predictions_vs_ground_truth(y_true,y_pred)` 接收等长一维标签，共用离散类刻度。都附加仅限关键字的 `save_path=None, show=False`，返回 `(Figure, Axes)`；调用方可选择保存、显示，并负责关闭 Figure。 |
 
 **形状与状态约定。** 输入一律为二维 `X=(n_samples,n_features)`、一维 `y=(n_samples,)`，不自动重排单样本或压平 `(n,1)`。统计和预处理沿 `axis=0` 按列累计，变换保留行数。数值路径接受实数 array-like 并转换成 float64，拒绝不支持的 dtype；独立 Encoder 可接收同一 dtype kind 的文本或有限实数，表格组合器用数值类别码。标签采用同一 dtype kind 的有限实数、布尔或字符串，可在同一 kind 内扩大位宽，避免字符串截断和跨 signed/unsigned 强制合成 float64。字段类型错误用 `TypeError`，形状、宽度、非法值和参数范围用 `ValueError`，未发布模型的直接推理用 `RuntimeError`。更新首先验证配置、数组、宽度和数值；接受宽度匹配的零行更新作为 no-op，首次零行更新不固定宽度。批量 `fit` 要求非空，成功时以输入重新拟合并重置旧统计、类别、缓冲、重训计数和 RNG；已拟合后的零行预测返回形状正确的空数组。方法不改写调用方数组，需保留的批次使用独立副本。
@@ -65,11 +65,12 @@
 - Encoder 以 `(输入列号, 类别值)` 为键。每批向量化发现新键，按列索引、类别值排序后作为一个后缀追加；同一批之前的列索引永不移动。数值块固定在前，编码列固定在后。出现新类别但尚未重训时，旧快照仍产生旧宽度，未知类别在对应旧列编码为全零。重训时同一新版映射编码所有原始缓冲行，旧列意义仍在原位。独立 Encoder 可配置 `error` 且报告未知类别；Pipeline 的表格组合器使用 `ignore`，允许真实流出现新类别。
 - Pipeline 串联无状态变换和终端模型；多个依赖不同变化坐标的学习步骤须封装成定义清楚学习输入的组合器。初版的 `TabularPreprocessor` 使用独立数值/类别输入分支，避免把普通 `partial_fit + transform` 串联误当作一致性保证。代价是保留原始缓冲、复制预处理快照以及在重训时重新编码；dense one-hot 在高基数时耗内存。
 
-### 阶段 C 接入约束
+### 阶段 C 集成
 
 - Pipeline 只维护一份原始 `(X, y)` 缓冲。达到门槛时，对整个缓冲应用同一候选快照，再调用候选树的 `fit`。
 - 每次候选树 `fit` 会把树内 `retrain_count_` 设回 1。Pipeline 自己维护累计重训次数，在候选成功发布时递增。
 - 候选预处理快照与候选树成对发布。树构建失败时，保留旧发布对、已有原始缓冲和累计计数。独立 `StandardScaler` 和 `TabularPreprocessor` 已提供冻结的 `transform` 接口。
+- 本实现的增量步骤限于上述两类，依赖其学习状态在成功更新后整体替换的契约。两类新增内部清空方法供 Pipeline 重置。组合器负责均值填补和类别编码，独立 Imputer 和 Encoder 继续通过各自接口使用。Scaler 路径拒绝 NaN 进入待训缓冲。
 
 ### 分裂与数值边界
 
@@ -86,6 +87,7 @@
 - **累计与滚动分类指标。** Trainer 配置固定标签表，训练树在每个缓冲区可只见其中部分标签。固定表用于混淆矩阵及日志；未在树中出现的已配置类别以零概率列对齐，表外标签在 Trainer 学习前报错。每批混淆矩阵加到 `int64` 总矩阵，accuracy 为总对角和除以总评估行数，从行/列总数提取 precision、recall 和 F1。默认零分母用 0，尚无评估行时 accuracy 为 NaN。滚动窗口按**样本**保存最近 `W` 条真值、预测和可用概率，驱逐可切开 chunk；对子矩阵加新计数、减驱逐计数。训练 warmup 不占窗口。
 - **AUC。** 有概率的评估行按评估当时的值保存，树更新后不回算。精确累计 AUC 用旧二分类 kernel 计算一对多，平局计半；rolling AUC 对 window 内有概率的行查询。只有正类或只有负类（包括空集）时该类 AUC 为 NaN，宏平均只含已定义的类别，无定义类别则为 NaN。单一真实类别的窗口所有 OvR AUC 都为 NaN。基于 `M` 行概率、`k` 类的累计存储为 `O(Mk)`；查询单个类别 `O(M log M)`，全类别 `O(kM log M)`，窗口以 `W` 为上界。查全量曲线反复排序的成本应与训练计时分开报告。缺概率的行仍进入计数和窗口，并从 AUC 样本中排除；结果返回概率行数供解释。多模型版本概率混合的 AUC 表示整个预序列预测历史。
 - **内存。** Trainer 每批成功后记录当前拥有的 ndarray buffer 字节数，按底层存储去重，分列报告树/预处理快照、学习状态、待训样本和指标历史；指向同一数组的引用只计一次，object 等间接对象及 Python 节点、容器、日志对象、解释器、绘图和临时工作区不在此口径。单独的 StreamingStats 历史由调用方持有，可单列其数组估计。该值是批末的实现内存估计，训练期间峰值和进程 RSS 需另行定义与实测；跨 buffer 比较使用同一口径。
+- **计时与日志。** `preprocessing_s` 累计本批学习和实际变换，`tree_fit_s` 包含候选树的输入验证与建树，`retrain_s` 从合并缓冲起覆盖冻结、整缓冲变换、拟合和发布，`update_s` 覆盖 Pipeline 的校验与整个学习调用。Trainer 另记 `evaluation_s`。累计或滚动 AUC 查询与日志构造在这些计时之外。日志存 accuracy、宏 precision/recall/F1、AUC 及行数等标量；完整逐类结果和矩阵由评分或指标查询返回。
 
 ## 5. Benchmark、demo 与实施顺序
 
@@ -100,8 +102,8 @@
 | 1 | **已完成。** 建立包入口，实现本阶段需要的列索引、数值及维度验证适配和 CSV 包装，并验证 T01–T03。模型状态和重置契约在对应阶段实现。 |
 | 2 | **阶段 A 已完成。** 实现独立 Gini 树和阈值缓冲重训，验证叶概率、分裂、随机性、精确达标、整批越线与失败保护。 |
 | 3 | **阶段 B 已完成。** 复用 `RunningStats` 实现增量预处理和独立 StreamingStats，验证快照、NaN、统计与列顺序。 |
-| 4 | 在树及预处理之上接 Pipeline 的原始缓冲与成对发布，验证两次重训之间的坐标。 |
-| 5 | 实现指标累计、滚动和 AUC；在 Pipeline 和指标上接 StreamTrainer，验证无泄漏时序、失败重试与日志。 |
+| 4 | **阶段 C 已完成。** 在树及预处理之上接 Pipeline 的原始缓冲与成对发布，验证两次重训之间的坐标。 |
+| 5 | **阶段 C 已完成。** 实现指标累计、滚动和 AUC，接入 Trainer 并验证先评估后学习、失败重试与日志。 |
 | 6 | 接绘图与 demo，新增两个 benchmark 入口并实际测量；运行旧套件与 2.2 测试，验证安装。 |
 | 7 | 更新 README，完成最多 4 页 PDF 技术报告及最多 5 分钟视频；在个人 fork 的个人分支整理提交并核对默认分支保留原始小组代码。 |
 
@@ -130,7 +132,11 @@ T01–T03 共 **3 项通过**（0.012 s）。旧套件 **642 项通过，0 项�
 
 新增 `preprocessing.py`、`stats.py` 和两个对应测试文件。各组件先验证候选状态再赋值。快照只保存变换参数，类别映射为只读且按版本替换。组合器接受数值表，类别码统一为 float64，大整数码可能合并；直接使用独立 Encoder 时保留原有类别 dtype。直方图为累积固定箱，精确分位数保留 `O(Nd)` 历史。极端有限输入如果使浮点矩溢出，会显式报错。
 
-在同一 `aiml` 环境运行预处理 **12 项**和统计 **4 项**，全部通过。全量套件 **683 项通过，0 项失败**，含阶段 B 16 项、之前的 2.2 测试 25 项、2.1 回归 642 项。警告是既有的 4 条 NumPy 配置输出。实施顺序第 4–7 项待执行。
+在同一 `aiml` 环境运行预处理 **12 项**和统计 **4 项**，全部通过。全量套件 **683 项通过，0 项失败**，含阶段 B 16 项、之前的 2.2 测试 25 项、2.1 回归 642 项。警告是既有的 4 条 NumPy 配置输出。
+
+### 阶段 C 完成记录
+
+新增 `pipeline.py`、`metrics.py`、`stream.py` 和三个对应测试文件。对已训练批只调用一次概率预测，并按树类别顺序选出预测，同步映射到配置词表。独立树实现保持原样。全量套件 **704 项通过、0 项失败**，其中阶段 C 21 项（Pipeline 8、指标 7、Trainer 6）、既有 2.2 测试 41 项、2.1 回归 642 项。4 条原有 NumPy 配置输出警告。阶段 D 的绘图、demo、benchmark 和最终交付验证待执行。
 
 ## 6. 需求覆盖与待确认
 
