@@ -4,8 +4,8 @@ All utility functions are implemented using NumPy and the standard library.
 Docstrings describe validation, edge cases, shapes, and memory requirements.
 
 Except for the explicitly named logsumexp operation, public names and signatures
-are provisional choices inferred from ASSIGNMENT_REQUIREMENTS.md. Numerical
-utility functions accept real numeric NumPy arrays; iter_batches accepts NumPy
+are provisional choices inferred from archive/assignment2.1/ASSIGNMENT_REQUIREMENTS.md.
+Numerical utility functions accept real numeric NumPy arrays; iter_batches accepts NumPy
 arrays of any dtype. Functions must not mutate their inputs. Floating-point numerical
 outputs use float64. Negative axes follow NumPy
 conventions. Non-contiguous arrays are supported. Complexity estimates include

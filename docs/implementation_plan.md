@@ -4,7 +4,7 @@
 
 检查时工作分支为 `raven/assignment2.2`，HEAD 和本地 `main` 均指向 `cec7f4ad55cddc738e5b5cb2c3212b3ac4fc0033`。`origin` 指向个人账户下的仓库，GitHub fork 的上游关联尚未核验。仓库及其上级目录没有找到适用的 `AGENTS.md`。已有未跟踪文件 `.vscode/settings.json` 已保留。
 
-阅读了 `pyproject.toml`、`README.md`、`API_CONTRACT.md`、`ASSIGNMENT_REQUIREMENTS.md`、`GROUP_ALLOCATION.md`，以及下表涉及的模块、测试和 demo 入口。旧文档的分工、20 项测试门槛以及无需实现模型的约定属于 2.1。本计划以本次提供的 2.2 正文和 specs 为准。
+阅读了 `pyproject.toml`、[旧 README](../archive/assignment2.1/README.md)、[旧 API 契约](../API_CONTRACT.md)、[旧作业要求](../archive/assignment2.1/ASSIGNMENT_REQUIREMENTS.md)、[旧小组分工](../archive/assignment2.1/GROUP_ALLOCATION.md)，以及下表涉及的模块、测试和 demo 入口。旧文档的分工、20 项测试门槛以及无需实现模型的约定属于 2.1。本计划以本次提供的 2.2 正文和 specs 为准。
 
 在仓库根目录用已有 Conda `aiml` 环境运行全量测试。默认 Homebrew Python 3.14.7 未找到 pytest，现有 `aiml` 无需安装依赖即可执行。
 

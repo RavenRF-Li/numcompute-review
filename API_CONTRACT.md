@@ -1,6 +1,8 @@
 # NumCompute API Contract
 
-This document defines the shared interfaces for NumCompute components.
+This document defines the Assignment 2.1 interfaces for the legacy
+`numcompute` package. See the [Assignment 2.2 implementation plan](docs/implementation_plan.md)
+for the proposed `numcompute_stream` interfaces.
 
 ## 1. Transformer interface
 
