@@ -2,7 +2,7 @@
 
 主计划包含 54 个单元或组件测试场景及 4 个交付验证场景，另有阶段 A 的 3 个、阶段 B 的 5 个和阶段 C 的 3 个补充场景。测试使用标准库 `unittest`、`unittest.mock`、`tempfile` 和 `numpy.testing`。数组以表中行顺序构造，`NaN` 表示 `np.nan`，一维数列作为特征时显式构造成单列二维数组。可手算的计数、标签及列顺序精确比较，浮点结果按事先约定的合理容差比较，NaN 使用 `isnan` 检查。
 
-阶段 D 完成 T52–T54、V01–V02 的自动测试，并单独执行 V03 和 V04 已适用的检查。现有 `aiml` 环境（Python 3.12.13、NumPy 2.5.2、matplotlib 3.11.1、pytest 9.2.0）分别运行 2.2 的 67 项和 2.1 的 642 项，均通过。合跑 709 项通过、0 项失败，仍有 4 条 2.1 NumPy 配置输出警告。T01–T54 均已执行，V04 中的 PDF 和视频核对留在阶段 E。详见 [实施计划](implementation_plan.md)。
+阶段 D 完成 T52–T54、V01–V02 的自动测试，并单独执行 V03 和 V04 当时适用的检查。现有 `aiml` 环境（Python 3.12.13、NumPy 2.5.2、matplotlib 3.11.1、pytest 9.2.0）包含 2.2 的 67 项和 2.1 的 642 项。阶段 E 用 `conda run -n aiml python -B -m pytest -p no:cacheprovider tests` 最终合跑，709 项通过、0 项失败，另有 4 条既有 NumPy 配置输出警告。确认包、Notebook 和验证入口自 D 阶段起保持一致。V04 的本地报告为 3 页，正式 PDF 核对和视频录制待人工完成。[实施计划](implementation_plan.md) · [提交清单](submission_checklist.md)
 
 ## CSV 与公共输入契约
 
