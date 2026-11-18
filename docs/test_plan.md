@@ -1,119 +1,14 @@
-# NumCompute-Stream 测试计划
+# Assignment 2.2 validation record
 
-主计划包含 54 个单元或组件测试场景及 4 个交付验证场景，另有阶段 A 的 3 个、阶段 B 的 5 个和阶段 C 的 3 个补充场景。测试使用标准库 `unittest`、`unittest.mock`、`tempfile` 和 `numpy.testing`。数组以表中行顺序构造，`NaN` 表示 `np.nan`，一维数列作为特征时显式构造成单列二维数组。可手算的计数、标签及列顺序精确比较，浮点结果按事先约定的合理容差比较，NaN 使用 `isnan` 检查。
+This page records the final checks for NumCompute-Stream and supports the technical report.
 
-阶段 D 完成 T52–T54、V01–V02 的自动测试，并单独执行 V03 和 V04 当时适用的检查。现有 `aiml` 环境（Python 3.12.13、NumPy 2.5.2、matplotlib 3.11.1、pytest 9.2.0）包含 2.2 的 67 项和 2.1 的 642 项。阶段 E 用 `conda run -n aiml python -B -m pytest -p no:cacheprovider tests` 最终合跑，709 项通过、0 项失败，另有 4 条既有 NumPy 配置输出警告。确认包、Notebook 和验证入口自 D 阶段起保持一致。V04 的本地报告为 3 页，正式 PDF 核对和视频录制待人工完成。[实施计划](implementation_plan.md) · [提交清单](submission_checklist.md)
+| Check | Result |
+| --- | --- |
+| Full regression suite | 709 passed, including 67 Assignment 2.2 tests and 642 legacy tests. Four existing warnings came from NumPy configuration output. |
+| Demo notebook | The `aiml` Jupyter kernel ran all five code cells from a clean state. The saved notebook contains successful outputs and three embedded plots. |
+| Installation | An offline build produced a wheel containing both packages. In a temporary environment, imports from outside the repository, minimal stream training and prediction, and PNG export with Agg all passed. |
+| Benchmarks | A fresh run checked Gini thresholds and gains and reproduced the three buffer accuracies on 1,744 shared evaluation rows. The retained measurement file matches all nine recorded source hashes and the synthetic CSV hash. |
 
-## CSV 与公共输入契约
+The Assignment 2.2 tests cover buffered retraining, missing values, category expansion and frozen preprocessing, score-before-update evaluation, rolling metrics, retry after a failed build, and artifact generation. The suite includes small reference examples for Gini gain and the common evaluation set.
 
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| T01 | io／按批读和取标签（已通过） | 临时 CSV 含表头，分号分隔，记录为 `1;;0`、`2;4;1`、`3;5;0`，中间插空行。用 `skip_header=1, chunk_size=2, target_col=-1`。另用正整数索引读取位于中间的目标列。 | 依次得到特征形状 `(2,2)`、`(1,2)`，标签 `[0,1]`、`[0]`。第一行第二列为 NaN，X、y 均为 float64。移出中间目标列时，两侧特征仍保持原顺序。 |
-| T02 | io／延迟的结构错误（已通过） | 首行三列、次行两列，分别用 `chunk_size=1` 和 `chunk_size=2` 逐次取生成器。 | 每批一行时首次迭代正常产出，第二次报告跨批列数不一致。两行在同一批时首次迭代即报告批内列数错误。两种错误均为 `ValueError`。 |
-| T03 | io／目标列及数值校验（已通过） | 尝试越界、布尔及浮点索引；有效索引下另测空、NaN、Inf、文本标签、特征 Inf 和单列 CSV。 | 越界为 `ValueError`，索引类型错误为 `TypeError`，两者均标明 `target_col`。非法数据在迭代时抛 `ValueError`，分别由解析器或包装层报告原因。 |
-| T04 | 校验／行列形状 | 对树输入 `X.shape=(3,)`、`y.shape=(3,1)`、`y.shape=(2,)` 均作为独立子例，另一输入合法。 | 分别报出 `X` 二维、`y` 一维或样本数不匹配，使用 `ValueError`，模型仍未训练。 |
-| T05 | 校验／类型及空列 | 用复数特征、`(2,0)` 特征以及 `buffer_size=True`。 | 分别抛 `TypeError`、`ValueError`、`TypeError`，消息指向相应字段。 |
-| T06 | 校验／空增量与空预测 | 未训练时先送 `X.shape=(0,9)`，再批量拟合两个特征的非空数据；随后预测 `(0,2)`，另试增量输入 `(0,3)`。 | 第一次空更新不锁定宽度。空预测和概率分别为 `(0,)`、`(0,k)`；已固定宽度后即使空更新也拒绝错误列数。 |
-
-## 决策树与原始树缓冲
-
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| T07 | tree／手算 Gini | `X=[[0],[1],[2],[3]], y=[0,0,1,1]`，深度 1。 | 根 Gini 为 0.5，最优阈值为 1，左右叶纯，训练预测等于 y；新值 1.5 走右叶。 |
-| T08 | tree／叶概率与类别顺序 | `max_depth=0`，标签 `["z","a","z"]`。 | `classes_=["a","z"]`，每行概率 `[1/3,2/3]`，预测 `"z"`。 |
-| T09 | tree／票数平局 | 常量特征四行，标签 `[3,1,3,1]`。 | 无分裂；概率 `[0.5,0.5]` 对应 `classes_=[1,3]`，预测 1。 |
-| T10 | tree／候选阈值与特征平局 | 两列都为 `[0,1,2]`，标签 `[0,1,0]`，深度 1。 | 阈值 0 与 1 的增益相同，两列同分，选择特征 0、阈值 0。可查内部节点或用两列冲突的新样本验证路由。 |
-| T11 | tree／重复值与无增益 | 单列 `[0,0,1,1]`，标签 `[0,1,0,1]`。 | 仅一个不同值边界且增益为 0，根为叶；两个不同取值的探针预测相同。 |
-| T12 | tree／min_samples_split | 使用 T07 数据，配置 `min_samples_split=5`。 | 只有 4 行，根不分裂，所有概率为 `[0.5,0.5]`。 |
-| T13 | tree／单一类别 | 拟合三个不同特征值，标签均为 `"yes"`。 | 单叶，`classes_=["yes"]`，概率形状 `(n,1)` 且全 1，预测均为 `"yes"`。 |
-| T14 | tree／极端有限特征 | 用 `float64` 的 `-max` 和 `max` 各一行，标签 `[0,1]`。 | 阈值是有限的左组最大值，训练预测 `[0,1]`，没有因计算中点溢出。 |
-| T15 | tree／特征抽样复现 | 固定 X、y 和 seed，用 `max_features=0.5` 拟合有三列特征及多个可分裂节点的数据；用测试替身观察采样调用，再用真实 Generator 重复拟合。 | 每个拟分裂节点请求两个不同特征；同一 seed 的两次实际拟合根及子树签名和概率一致。 |
-| T16 | tree／max_features 参数 | 两列训练数据，尝试整数 3、浮点 0.0、浮点 1.1，以及 `None` 与 1.0。 | 前三项各报 `ValueError`；后二者在相同数据上用全部候选并给出一致分裂。 |
-| T17 | tree／冷启动与刚好达标 | `buffer_size=4`，两批各两行，预测尝试安排在第一批之后。 | 第一批后 `pending_samples_=2`，预测和概率报 `RuntimeError`。第二批后只重训一次，以四行训练，待训数归零。 |
-| T18 | tree／越线整块纳入 | `buffer_size=3, max_depth=0`，先两行标签 0，再三行标签 1。 | 仅重训一次，最近训练数 5，待训数 0，概率为 `[0.4,0.6]`，预测 1。 |
-| T19 | tree／两次重训之间及流尾 | `buffer_size=3`，先三行全 0 再两行全 1，读取状态后再送一行 1。 | 流尾暂存两行，旧预测及 `classes_=[0]` 保持。后续补满时训练三行，`classes_=[1]`，旧的训练批未混入。 |
-| T20 | tree／fit 重置 | 已训练且缓冲有待训数据时，对行数少于门槛、标签仅为 `"new"` 的新数据调用 `fit`。 | 立即训练，新类空间仅含 `"new"`，待训数 0，计数重新从这次成功建树记为 1。 |
-| T21 | tree／非有限值 | 拟合正常树后，分别提交 NaN 特征、Inf 特征及 NaN 标签。 | 各抛 `ValueError`；每次拒绝都不改变待训数、已训练版本、类别和探针预测。 |
-| T22 | tree／缓冲所有权 | 达标前送入非连续 X、y 视图，调用后覆写其底层存储，再提交能触发训练的下一批。 | 训练使用第一批原值和标签，与用独立原值重放结果一致。调用本身不写入用户数组。 |
-
-**已通过** T04–T22，以及以下 3 项补充测试。
-
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| A01 | tree／建树失败与重试 | 有一棵已训练的树和一行待训数据，注入建树异常，分别调用 `fit` 和触发门槛的 `partial_fit`。解除异常后重试增量批。 | 两次失败均保留旧预测、类别、待训行与计数。重试时训练行数为 3，新批只计一次。 |
-| A02 | tree／跨批数据约束 | 缓冲一行后送入不同宽度或不同标签 dtype kind 的批次，再以相同 dtype 送入一个相邻的大整数标签。 | 错误批次不入缓冲；两个相邻 `uint64` 大整数标签保持可区分，修改 `classes_` 的返回数组不影响预测。 |
-| A03 | tree／独立多类分裂参考 | 有重复特征值的三类数据，逐个候选阈值用 Python 循环分组、数标签并算 Gini 增益。 | NumPy 候选阈值与参考逐项一致，增益在 `1e-14` 绝对容差内一致。 |
-
-## 增量预处理、快照与 Pipeline
-
-**已通过** T23–T30（`tests/test_stream_preprocessing.py`）和 T31–T36、C01–C02（`tests/test_stream_pipeline.py`）。
-
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| T23 | Scaler／不等长批与 NaN | 分批更新 `[[0,4],[2,4]]` 和 `[[4,NaN]]`。 | 计数 `[3,2]`，均值 `[2,4]`，scale `[sqrt(8/3),1]`，第二列的常量变为 0，变换时 NaN 保留。 |
-| T24 | Imputer／fallback 及恢复 | `fill_value=-5`，先更新 `[[NaN],[NaN]]`，再更新 `[[2],[4]]`，各次变换 NaN。 | 首次替换为 -5，第二次为 3，旧 fallback 没有进入均值样本。 |
-| T25 | Scaler／稳定方差 | 分批输入单列 `[1e12+1,1e12+2]`、`[1e12+3]`。 | 均值 `1e12+2`、总体方差 `2/3`，中心样本标准化为 0。独立手算使用相对 `1e12` 的偏移量。 |
-| T26 | Scaler／不可表示的运算 | 先学常量 0，保存状态，再送 `[float64_max,-float64_max]`。 | 矩估计的结果无法表示，明示 `ValueError`，更新前的均值、计数、scale 和变换仍有效。 |
-| T27 | Encoder／跨列追加 | 首批类别行 `[[2,8]]`，第二批 `[[1,7]]`，再编码两行。 | 输出列顺序为 `[(0,2),(1,8),(0,1),(1,7)]`，结果是 `[[1,1,0,0],[0,0,1,1]]`。较小的新类别只追加。 |
-| T28 | Encoder／未知类别策略 | 用 `[[2,8]]` 拟合后变换 `[[99,8]]`，分别用 ignore 和 error。 | ignore 返回 `[[0,1]]`，error 报 `ValueError`；两种操作均不新增列、不更新字典。 |
-| T29 | Encoder／类别验证 | 对已拟合数值编码器分别送 NaN、Inf、字符串批。 | 前两项为 `ValueError`，dtype kind 不匹配为 `TypeError`；旧映射保持。 |
-| T30 | 预处理／fit 重置 | Scaler 和 Imputer 先累计 0、2，再用 10 单行 fit；Encoder 先学 `"old"`，再以 `"new"` fit。 | 数值中心与填补值均为 10、观测数为 1；编码映射只含 `"new"`。 |
-| T31 | Pipeline／冻结变换 | 数值 Pipeline 的 `buffer_size=2`。先对 `[0,2]` 重训，然后提交 `[10]`，比较提交前后的 `transform([[5]])` 和概率。 | 旧快照中心 1、scale 1，提交前后变换都为 4，预测概率一致；新样本仍待训。 |
-| T32 | Pipeline／重新变换整份缓冲 | 接续 T31 再送 `[NaN]`，用 spy 捕获建树输入，同时正常训练。 | 新中心与均值填补值为 4，scale 为 `sqrt(56/3)`；树接收两行 `[[6 / sqrt(56/3)],[0]]`。发布后同两行的 transform 与建树输入一致。 |
-| T33 | Pipeline／维度变化和旧树 | 分类列初始两行均为类别 2，完成首次重训。新批送类别 1，预测两类探针后再送类别 2 触发重训。 | 中间宽度为 1，未知 1 变为 0 且可由旧树预测。重训建树矩阵及新探针变换均按原列 2、新列 1 的顺序，类别 1、2 分别为 `[0,1]`、`[1,0]`，新树接收两列。 |
-| T34 | Pipeline／失败回滚与重试 | 已发布 Pipeline 有一个待训批，在下一批触发重训时模拟建树异常。解除故障后重送该批。 | 失败不更改学习统计、发布树、快照、旧缓冲或版本。重试只把新批纳入一次，新矩估计和输出等于无故障重放。 |
-| T35 | Pipeline／保行及组合契约 | 加入返回少一行的无状态 transformer；另以两个学习型步骤或重复名称构造 Pipeline。 | 变换丢行抛 `ValueError` 并指明步骤，更新不提交。超出学习步骤数量或重复名称在构造时拒绝。 |
-| T36 | Pipeline／批量重置组合状态 | 混合列 Pipeline 已训练且有待训行。用门槛以下一行执行 `fit`，该行有新类别。 | 立即发布新模型，只有新类别列和新数值统计，待训为 0；旧类别在新 snapshot 中编码为全零。 |
-| C01 | Pipeline／裸树和越线 | 门槛 3，依次送两行标签 0 和四行标签 1，再送三行标签 0。监控独立树的 `partial_fit`。 | 前两批合在一起建一次树，六行全部训练，叶概率 `[1/3,2/3]`；第三批用三行重训。独立树的增量入口未被调用。 |
-| C02 | Pipeline／无状态接口与顺序 | 串联乘 2、Scaler、加 10 和树，输入数值列 `[0,2]`，验证配置模板。 | 发布后的变换为 `[9,11]`，分类正确，输入数组、Scaler 和树的配置模板状态保持。 |
-
-**已通过的阶段 B 补充测试**
-
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| B01 | Scaler／独立快照与树 | 用 0、2 拟合 Scaler 并冻结，用其变换训练树，再给 Scaler 增量输入 4。 | 探针 5 在旧快照下仍为 4；新变换为 `3/sqrt(8/3)`。树继续用旧快照可得到预期预测。 |
-| B02 | 组合器／快照固定数值和类别 | 一列数值、两列类别，首批数值 0、2、NaN，类别均为 (2,8)。保存快照。更新 (10,1,7)、(NaN,2,8)，再执行一次独立 `fit`。 | 对探针 (5,1,8)，快照始终返回 `[4,0,1]`；更新后的变换为 `[1/sqrt(56/3),0,1,1,0]`。再次 `fit` 重置学习状态。 |
-| B03 | 组合器／两个分支一起提交 | 已学数值 0、2 和类别 2，然后提交数值 100、类别 NaN，分别试 `fit` 和 `partial_fit`。 | 两种调用均报错，原数值和类别变换保持。后续合法批正常累计。 |
-| B04 | 组合器／单分支及未观测列 | 数值分支选择列 `[1,0]`，第一输出列未观测、fallback 为 -3；另建只选列 1 的类别分支，训练类别 9 和 4。 | 数值探针 (2,NaN) 变为 `[-3,0]`；类别 9、4、7 分别为 `[0,1]`、`[1,0]`、`[0,0]`，输出遵循所选列。 |
-
-## 统计与指标
-
-**已通过** T37–T39 及 B05（`tests/test_stream_stats.py`），T40–T46（`tests/test_stream_metrics.py`）。
-
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| T37 | stats／跨批均值、方差、分位数 | 两次 `update_stats`，第一批 `[[0,NaN],[2,2]]`，第二批 `[[4,4]]`。 | count `[3,2]`、mean `[2,3]`、总体方差 `[8/3,1]`。标量 q=0.5 得 `[2,3]`，`q=[0.25,0.75]` 得 `[[1,2.5],[3,3.5]]`。 |
-| T38 | stats／直方图端点与范围外 | 边缘 `[0,1,2]`，单列两批 `[-1,0,1]`、`[2,3,NaN]`。 | counts `[[1,2]]`，2 在最后一箱，underflow 与 overflow 各 1，NaN 不计。 |
-| T39 | stats／全缺失、ddof 与 reset | 送 `[[NaN,3]]`，查询 `ddof=1`，再 reset 并送 `[[4,5]]`。 | 首次 count `[0,1]`，方差两列均 NaN，第一列均值及分位数 NaN；重置后 count `[1,1]`，均值 `[4,5]`，bin edges 保留。 |
-| B05 | stats／候选失败与数据所有权 | 用边缘 `[0,1,2]` 和 `[0.5,1.5]` 更新，改写传入数组，再试非法宽度、Inf 和数值溢出，最后改写查询返回的数组。 | 非法更新抛出 `ValueError`，累计均值及中位数仍为 1，直方图仍为 `[[1,1]]`，查询和输入数组的改写均不影响历史。 |
-| T40 | metrics／累计比率按样本 | 配置标签 `[1,0]`。先一行预测正确，再三行真值 1、预测 0。 | 累计 accuracy 为 0.25，按标签顺序行真列预测的混淆矩阵为 `[[1,3],[0,0]]`（首行取真值/预测均为 1），类 1 precision=1、recall=0.25。 |
-| T41 | metrics／窗口切开批次 | 标签顺序 `[0,1]`，W=3，更新 y/pred 分别为 `[0,1]/[0,1]` 和 `[1,0]/[0,0]`。 | 累计矩阵 `[[2,0],[1,1]]`、accuracy 0.75；滚动矩阵 `[[1,0],[1,1]]`、accuracy 2/3，仅驱逐首条。 |
-| T42 | metrics／无分母与重置 | 只记录真值和预测均为 0，指定标签 `[0,1]`、`zero_division=0`、启用窗口，然后 reset。 | 类 1 precision、recall、F1 均为 0；重置后累计及滚动行数为 0、矩阵为零，accuracy 与 AUC 为 NaN。 |
-| T43 | metrics／跨批 AUC 与同分 | 正类 1。两批真值 `[1,0]`、`[1,0]`，对应正类概率 `[0.5,0.5]`、`[0.9,0.8]`，另一概率列为补数。 | 用独立正负四对比较得 2.5/4=0.625。结果来自跨批分数，不能等于各批 AUC 的平均 0.75。 |
-| T44 | metrics／滚动 AUC 缺类 | W=2，先更新两行真值 `[0,1]`、正类概率 `[0.1,0.9]`，再传两行真值 `[1,1]`、概率 `[0.7,0.8]`。 | 首次累计/滚动 AUC 都为 1；之后累计 AUC 仍是 1，滚动 AUC 为 NaN，滚动准确率仍按标签算。 |
-| T45 | metrics／多类 OvR 与缺省概率 | 标签 `[0,1,2]`，真值 `[0,1,2]`、对应概率矩阵为单位矩阵，再添加一行不带概率的错分类。 | 三个 OvR AUC 及宏平均均为 1，有概率行数 3，累计样本数 4、accuracy 0.75。 |
-| T46 | metrics／非法更新不提交 | 在已有数据后分别提交表外标签、非有限概率、行和不为 1、概率列数错误。 | `ValueError` 指向标签或概率约束，每次拒绝均保留累计、滚动计数及 AUC 历史。 |
-
-## 流管理、绘图与交付验证
-
-**已通过** T47–T51 和 C03（`tests/test_stream_trainer.py`）。
-
-**已通过** T52–T54（`tests/test_stream_visualise.py`）、V01–V02（`tests/test_stream_delivery.py`）及仓库外 V03。V04 的 Notebook、benchmark、测试和 README 命令已核对。
-
-| 编号 | 模块／功能 | 输入或操作 | 预期 |
-| --- | --- | --- | --- |
-| T47 | StreamTrainer／先评估后学习 | 门槛 2。每批 X 为 `[[0],[1]]`，标签依次 `[0,1]`、`[1,0]`、`[1,0]`，树允许一次有效分裂。 | 第一批触发首训但评估状态为 warmup、计 0 行；第二批用旧树得到 0 accuracy，第三批用已更新的树得到 1。累计 4 个评估行、accuracy 0.5，日志评估版本先于本批发布版本。 |
-| T48 | StreamTrainer／概率列对齐 | Trainer 标签顺序 `[1,0]`。首训只见标签 0，第二批真实标签为 `[1,0]`，用 spy 核验评分提交。 | 树的概率列仅对应 0。为 metrics 对齐后每行 `[0,1]`，accuracy=0.5，正类 AUC=0.5，矩阵为 `[[0,1],[0,1]]`。 |
-| T49 | StreamTrainer／重复评分无副作用 | 训练后对同一合法 chunk 连续调用两次 `score_chunk`，另试一个未知标签的 `fit_chunk`。 | 两份评分内容等价，版本、待训数、日志、指标均未变化；未知标签学习失败且连续流可接受下一合法批次。 |
-| T50 | StreamTrainer／内存口径与日志 | 用共享底层的两个数组视图和一份独立已知 `nbytes` 数组测试内部字节汇总；再用真实 Trainer 读批末日志。 | 两个视图底层只计一次；独立存储单独计入。日志子项加总等于报告的数组估计，待训项在重训发布后为 0。 |
-| T51 | StreamTrainer／学习失败不记指标 | 已就绪且可评分时模拟候选建树失败，对同一 chunk 重试。 | 失败不提交评估行或日志；成功重试新增恰好一条日志与一次该 chunk 的指标。 |
-| C03 | StreamTrainer／空批及重置 | 有已发模型、待训行和日志时送合法零行批，然后执行 `reset()` 并用两特征数据重启。 | 空批返回空评分且无新增日志。重置清空缓冲、计数、指标和日志，允许不同宽度的首批并从 warmup 开始。 |
-| T52 | visualise／时间序列与保存 | 用 Agg 调用 `plot_metric_over_time([NaN,0.5,1], ...)` 并保存到临时路径。 | 文件非空；Figure/Axes 标题和纵轴名正确，曲线数据保留 NaN 空点，无需 GUI。 |
-| T53 | visualise／比较与显示 | 传入两条等长序列和两个名称，mock `plt.show` 并设 `show=True`；再传不同长度。 | 两条线和图例正确，show 调用一次。非法长度报 `ValueError`。 |
-| T54 | visualise／真值与预测共用刻度 | 真值 `["b","a"]`、预测 `["a","b"]`，检查 plot 的艺术对象及坐标。 | 两个系列都保留两点；同一标签在真值和预测上落在同一离散坐标，轴含两类刻度。 |
-| V01 | 端到端 CSV → Pipeline → 绘图 | CSV 三批、每批两行，标签依次为 `[0,1]`、`[1,1]`、`[0,1]`，后两批具有缺失数值和新类别。按 Notebook 的工作流入口重放。 | 保序读得六行，只有首批 warmup，重训三次且缓冲清空。四个评估标签为 `[1,1,0,1]`，学习前预测为 `[0,0,1,1]`，准确率 0.25。指标和预测对照图均可保存。 |
-| V02 | benchmark／正确性与公平掩码 | 用手算 Gini 例运行小负载，检查双方分裂；另对每批两行的四批流用门槛 2、4，取得每个运行的评估 mask。 | loop 与 NumPy 产生相同分裂和分区；较小门槛评估第 2–4 批，较大门槛评估第 3–4 批，比较使用相同的第 3–4 批。记录各自覆盖率和计时范围，无速度断言。 |
-| V03 | 打包与可运行性 | 在实现阶段构建 wheel 并安装到独立环境，在仓库外导入两个包，跑最小流式训练及 Agg 绘图。 | 旧包、复用入口、新包均能从安装位置导入；运行依赖只声明 NumPy 和 matplotlib（及其传递依赖），最小流得到预期标签及图。 |
-| V04 | 交付物核查 | 跑全量旧测试和 2.2 新套件，执行 notebook，运行 benchmark，核对 README、报告和视频。 | 保存真实通过/失败、环境及实验记录；新套件至少有 30 个有意义的单元测试。报告最长 4 页且引用实测结果，视频最长 5 分钟，README 命令能复现主要流程。 |
-
-阶段 D 实测 V03 使用无索引的临时 wheel 安装与仓库外导入，训练及 Agg PNG 均成功。V04 使用真实 `aiml` kernel 执行 5 个单元，保存 3 个图、Notebook 输出及新 benchmark JSON。先前的 2.1 benchmark 文件经 SHA-256 核对保持原样。
+The checks used Python 3.12.13, NumPy 2.5.2, and Matplotlib 3.11.1 in the existing `aiml` environment. The [README](../README.md) provides the commands. Replay outputs and measured workloads are available in the [notebook](../demo/stream_demo.ipynb) and [benchmark record](../benchmark/stream_results.json).

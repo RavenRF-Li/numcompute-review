@@ -4,9 +4,15 @@ NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从�
 
 - `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
 - `numcompute_stream/` 已实现数值 CSV 分批读取、Gini 树与缓冲重训、增量预处理、流式统计、Pipeline、分类指标、StreamTrainer 和可视化。2.2 的 Notebook 与基准实验均已执行。
-- 2.2 技术报告已生成可编辑 Word 和 3 页 PDF，视频录制材料已备齐。`demo/quickstart.ipynb` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- 2.2 技术报告提供可编辑 Word 和 3 页 PDF。`demo/quickstart.ipynb` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
 
-## 运行与测试
+## 安装、运行与测试
+
+在仓库根目录，使用 Python 3.10 或更新版本安装本地项目。项目依赖 NumPy 1.24 或更新版本和 matplotlib 3.6 或更新版本。
+
+```sh
+python -m pip install .
+```
 
 在仓库根目录，使用已有的 Conda `aiml` 环境运行。以下示例读取样例 CSV 的第一批，以最后一列为标签。两组数组均为 float64，特征缺失值保留为 NaN。
 
@@ -101,25 +107,23 @@ conda run -n aiml python -B -m pytest -p no:cacheprovider tests
 
 ```sh
 conda run -n aiml python -B -m demo.execute_stream_notebook
-conda run -n aiml python -B -m benchmark.run_stream
+conda run -n aiml python -B -m benchmark.run_stream --output "$(mktemp -d)/stream_results.json"
 conda run -n aiml python -B -m demo.check_stream_install
 ```
 
 - Notebook 保留实际输出，PNG 可单独查看。[累计准确率](demo/figures/stream_metric.png)、[共同批次模型比较](demo/figures/stream_compare.png)、[预测对照](demo/figures/stream_predictions.png)
-- 基准命令会输出计时表和 JSON。循环与 NumPy 在计时前核对候选阈值和 Gini 增益。三个 buffer 使用共同可评估批次比较准确率，整体时间包含评分、精确 AUC 和内存日志。[实测 JSON](benchmark/stream_results.json)
+- 基准命令会输出计时表和一份新的 JSON 到临时目录。循环与 NumPy 在计时前核对候选阈值和 Gini 增益。三个 buffer 使用共同可评估批次比较准确率，整体时间包含评分、精确 AUC 和内存日志。[随仓库提交的实测 JSON](benchmark/stream_results.json)
 - 安装检查离线构建 wheel，安装到临时 venv 并从仓库外导入两个包，运行训练与 Agg 绘图。临时 venv 复用 `aiml` 的 NumPy 和 matplotlib。
 
-项目要求 Python 3.10 或更高版本，运行依赖为 NumPy 1.24 或更高版本和 matplotlib 3.6 或更高版本。最终全量回归使用 `aiml` 的 Python 3.12.13、NumPy 2.5.2 和 matplotlib 3.11.1，共 709 项通过，其中 642 项为旧测试、67 项为 2.2 测试。
+全量回归使用 `aiml` 的 Python 3.12.13、NumPy 2.5.2 和 matplotlib 3.11.1，共 709 项通过，其中 642 项为旧测试、67 项为 2.2 测试。
 
 ## 报告与提交
 
 - 技术报告及其导出版本。[可编辑 Word](report/Assignment2.2-report.docx) · [3 页 PDF](report/Assignment2.2-report.pdf)
-- 录制稿件和交付前核对。[英文讲稿](docs/video_script.md) · [录制步骤](docs/video_recording_steps.md) · [提交清单](docs/submission_checklist.md)
-- push 后的仓库提交入口。[个人分支 raven/assignment2.2](https://github.com/RavenRF-Li/numcompute-review/tree/raven/assignment2.2)
+- 仓库提交入口。[个人分支 raven/assignment2.2](https://github.com/RavenRF-Li/numcompute-review/tree/raven/assignment2.2)
 
-## 规划与归档
+## API 与归档
 
-- [实施计划](docs/implementation_plan.md)和[测试计划](docs/test_plan.md)记录 2.2 的结构、进度与验收场景。
 - [旧 API 契约](API_CONTRACT.md)适用于 `numcompute/`。
 - [Assignment 2.1 归档](archive/assignment2.1/)保留[原 README](archive/assignment2.1/README.md)、作业要求、分工、贡献记录和历史报告（[PDF](archive/assignment2.1/report/NumCompute-report.pdf)、[DOCX](archive/assignment2.1/report/NumCompute-report.docx)）。归档文档里的运行命令及代码、测试、demo 和 benchmark 路径以仓库根目录为基准。
 
