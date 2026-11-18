@@ -4,7 +4,7 @@ NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从�
 
 - `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
 - `numcompute_stream/` 已实现数值 CSV 分批读取、Gini 树与缓冲重训、增量预处理、流式统计、Pipeline、分类指标、StreamTrainer 和可视化。2.2 的 Notebook 与基准实验均已执行。
-- 2.2 技术报告提供可编辑 Word 和 3 页 PDF。`demo/quickstart.ipynb` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- 2.2 技术报告为 3 页 PDF。`demo/quickstart.ipynb` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
 
 ## 安装、运行与测试
 
@@ -119,7 +119,7 @@ conda run -n aiml python -B -m demo.check_stream_install
 
 ## 报告与提交
 
-- 技术报告及其导出版本。[可编辑 Word](report/Assignment2.2-report.docx) · [3 页 PDF](report/Assignment2.2-report.pdf)
+- [技术报告（3 页 PDF）](report/Assignment2.2-report.pdf)
 - 仓库提交入口。[个人分支 raven/assignment2.2](https://github.com/RavenRF-Li/numcompute-review/tree/raven/assignment2.2)
 
 ## API 与归档
