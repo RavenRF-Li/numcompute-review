@@ -1,20 +1,20 @@
-# NumCompute-Stream · Assignment 2.2
+# NumCompute-Stream
 
-NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从零实现一棵 NumPy 决策树，通过 `partial_fit` 接收数据批次，在缓冲达标时用整个缓冲区重训。
+NumCompute-Stream is a modular framework for streaming classification, developed for Assignment 2.2. Its NumPy decision tree accepts batches through `partial_fit` and retrains on the entire buffer once it reaches the configured threshold.
 
-- `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
-- `numcompute_stream/` 已实现数值 CSV 分批读取、Gini 树与缓冲重训、增量预处理、流式统计、Pipeline、分类指标、StreamTrainer 和可视化。2.2 的 Notebook 与基准实验均已执行。
-- 2.2 技术报告为 3 页 PDF。`demo/quickstart.ipynb` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- `numcompute/` contains the numerical tools and original interfaces from Assignment 2.1.
+- `numcompute_stream/` provides batched numeric CSV input, a Gini decision tree, buffered retraining, incremental preprocessing and statistics, a pipeline, classification metrics, `StreamTrainer`, and visualizations.
+- The Assignment 2.2 notebook includes its executed outputs, and the benchmark results are checked in. `demo/quickstart.ipynb` and `benchmark/results.json` preserve the Assignment 2.1 examples and measurements.
 
-## 安装、运行与测试
+## Installation and examples
 
-在仓库根目录，使用 Python 3.10 或更新版本安装本地项目。项目依赖 NumPy 1.24 或更新版本和 matplotlib 3.6 或更新版本。
+From the repository root, install the project using Python 3.10 or later. It requires NumPy 1.24 or later and Matplotlib 3.6 or later.
 
 ```sh
 python -m pip install .
 ```
 
-在仓库根目录，使用已有的 Conda `aiml` 环境运行。以下示例读取样例 CSV 的第一批，以最后一列为标签。两组数组均为 float64，特征缺失值保留为 NaN。
+Run the examples from the repository root in the existing Conda `aiml` environment. The first example reads one batch of the sample CSV and uses the last column as the label. Both arrays use `float64`, and missing feature values remain `NaN`.
 
 ```sh
 conda run --no-capture-output -n aiml python -B - <<'PY'
@@ -31,7 +31,7 @@ finally:
 PY
 ```
 
-以下示例在缓冲区累积到四行后训练。预测概率按 `classes_` 排列，独立树要求有限的数值特征。
+This example trains the tree after the buffer reaches four rows. Probability columns follow `classes_`. The standalone tree requires finite numeric features.
 
 ```sh
 conda run --no-capture-output -n aiml python -B - <<'PY'
@@ -45,7 +45,7 @@ print(tree.classes_.tolist(), tree.predict_proba([[3]]).tolist())  # ['high', 'l
 PY
 ```
 
-预处理快照固定了数值变换和输出列。下面用两批数据更新混合列预处理器，并对同一行比较快照与当前变换。
+A preprocessing snapshot fixes the numeric transformation and output columns. This example updates a mixed-column preprocessor with two batches and compares the snapshot with the current transformation for the same row.
 
 ```sh
 conda run --no-capture-output -n aiml python -B - <<'PY'
@@ -60,9 +60,9 @@ print(prep.transform([[2, 2]]).tolist())    # [[0.0, 0.0, 1.0]]
 PY
 ```
 
-`StreamingStats(bin_edges=...)` 按列累计均值、方差和固定箱直方图，通过 `result(q=0.5)` 查询精确分位数。精确分位数保留历史样本，内存随累计行数增长。
+`StreamingStats(bin_edges=...)` tracks per-column means, variances, and fixed-bin histograms. Use `result(q=0.5)` to query the exact median. Exact quantile queries retain historical samples, so memory use grows with the number of rows.
 
-以下流先用旧模型评估每批，再学习当前批。第二批同时带来数值 NaN 和新类别，第三批触发第二次重训。
+The trainer scores each batch with the current model before learning from that batch. The second batch introduces a numeric `NaN` and a new category. The third triggers the second tree build.
 
 ```sh
 conda run --no-capture-output -n aiml python -B - <<'PY'
@@ -86,24 +86,28 @@ for X, y in [
 PY
 ```
 
-Pipeline 支持裸树、一个 `StandardScaler` 或 `TabularPreprocessor` 接树，以及前后逐行独立的保行无状态变换。含 NaN 的原始数据用组合器填补。Trainer 只将已经预测的样本纳入累计与滚动指标，`score_chunk` 只评分。日志保存标量摘要，`trainer.metrics.result()` 返回完整混淆矩阵和逐类结果。精确累计 AUC 保留历史分数并在查询时排序。日志分别记录预处理、tree fit、重训、整体更新和评估耗时，内存字段估算当前保留的 NumPy 数组存储。
+The pipeline supports a standalone tree or a tree preceded by one `StandardScaler` or `TabularPreprocessor`. It also supports stateless, row-wise transformations that preserve row count before or after the incremental preprocessor. Use `TabularPreprocessor` to impute missing numeric values. Cumulative and rolling metrics count only rows for which the trainer made predictions. `score_chunk` evaluates a batch without updating the model.
+
+The log stores scalar summaries. Call `trainer.metrics.result()` for the full confusion matrix and per-class metrics. Exact cumulative AUC retains historical scores and sorts them at query time. The log records separate timings for preprocessing, tree fitting, retraining, the full update, and evaluation. Its memory field estimates the storage of retained NumPy arrays.
+
+## Tests
 
 ```sh
-# Assignment 2.2 当前全部测试
+# Assignment 2.2 tests
 conda run -n aiml python -B -m unittest discover -s tests -p 'test_stream_*.py' -v
 
-# Assignment 2.1 回归测试
+# Assignment 2.1 regression tests
 conda run -n aiml python -B -m pytest -p no:cacheprovider tests --ignore-glob='tests/test_stream_*.py'
 
-# 两套测试一起运行
+# Run both suites
 conda run -n aiml python -B -m pytest -p no:cacheprovider tests
 ```
 
-## Notebook、基准与安装验证
+## Notebook, benchmarks, and installation check
 
-已执行的 [stream_demo.ipynb](demo/stream_demo.ipynb) 按 CSV 原顺序重放 2,000 条合成观测，展示先评估后学习、warmup、缓冲重训、滚动指标和分批统计。数据生成规则见 [CSV 数据说明](demo/data/README.md)。
+The [executed notebook](demo/stream_demo.ipynb) replays 2,000 synthetic observations in CSV order. It demonstrates evaluation before learning, warmup, buffered retraining, rolling metrics, and batched statistics. The generation rules are documented separately. [CSV data notes](demo/data/README.md)
 
-在仓库根目录运行以下命令。Notebook 执行器使用现有 `aiml` Jupyter kernel 和本地 IPC，受限环境需要允许本地套接字。本机的 `aiml` 已提供 `jupyter_client`、`ipykernel` 和 `matplotlib_inline`，供执行 Notebook 使用。
+Run these commands from the repository root. The notebook runner uses the `aiml` Jupyter kernel and local IPC, so it needs permission to open local sockets. The `aiml` environment used here includes `jupyter_client`, `ipykernel`, and `matplotlib_inline`.
 
 ```sh
 conda run -n aiml python -B -m demo.execute_stream_notebook
@@ -111,26 +115,26 @@ conda run -n aiml python -B -m benchmark.run_stream --output "$(mktemp -d)/strea
 conda run -n aiml python -B -m demo.check_stream_install
 ```
 
-- Notebook 保留实际输出，PNG 可单独查看。[累计准确率](demo/figures/stream_metric.png)、[共同批次模型比较](demo/figures/stream_compare.png)、[预测对照](demo/figures/stream_predictions.png)
-- 基准命令会输出计时表和一份新的 JSON 到临时目录。循环与 NumPy 在计时前核对候选阈值和 Gini 增益。三个 buffer 使用共同可评估批次比较准确率，整体时间包含评分、精确 AUC 和内存日志。[随仓库提交的实测 JSON](benchmark/stream_results.json)
-- 安装检查离线构建 wheel，安装到临时 venv 并从仓库外导入两个包，运行训练与 Agg 绘图。临时 venv 复用 `aiml` 的 NumPy 和 matplotlib。
+- The notebook includes saved outputs. Its figures are also available as PNGs. [Cumulative accuracy](demo/figures/stream_metric.png), [Model comparison on shared batches](demo/figures/stream_compare.png), [Predictions and ground truth](demo/figures/stream_predictions.png)
+- The benchmark prints a timing table and writes a fresh JSON file to a temporary directory. It checks that the Python loop and NumPy agree on candidate thresholds and Gini gains before timing. It compares accuracy for three buffer sizes on the same evaluable batches. Overall runtime includes scoring, exact AUC queries, and memory logging. [Recorded benchmark results](benchmark/stream_results.json)
+- The installation check builds a wheel offline, installs it in a temporary virtual environment, then imports both packages from outside the checkout. It verifies training and plotting with the Agg backend using the NumPy and Matplotlib already available in `aiml`.
 
-全量回归使用 `aiml` 的 Python 3.12.13、NumPy 2.5.2 和 matplotlib 3.11.1，共 709 项通过，其中 642 项为旧测试、67 项为 2.2 测试。
+The full suite passed 709 tests in `aiml` with Python 3.12.13, NumPy 2.5.2, and Matplotlib 3.11.1. This includes 642 legacy tests and 67 Assignment 2.2 tests.
 
-## 报告与提交
+## Report and submission
 
-- [技术报告（3 页 PDF）](report/Assignment2.2-report.pdf)
-- 仓库提交入口。[个人分支 raven/assignment2.2](https://github.com/RavenRF-Li/numcompute-review/tree/raven/assignment2.2)
+- [Technical report (3-page PDF)](report/Assignment2.2-report.pdf)
+- [Submission branch raven/assignment2.2](https://github.com/RavenRF-Li/numcompute-review/tree/raven/assignment2.2)
 
-## API 与归档
+## API and archive
 
-- [旧 API 契约](API_CONTRACT.md)适用于 `numcompute/`。
-- [Assignment 2.1 归档](archive/assignment2.1/)保留[原 README](archive/assignment2.1/README.md)、作业要求、分工、贡献记录和历史报告（[PDF](archive/assignment2.1/report/NumCompute-report.pdf)、[DOCX](archive/assignment2.1/report/NumCompute-report.docx)）。归档文档里的运行命令及代码、测试、demo 和 benchmark 路径以仓库根目录为基准。
+- The API contract covers the original `numcompute/` package. [Legacy API contract](API_CONTRACT.md)
+- The Assignment 2.1 archive contains the original README, assignment requirements, task allocation, contribution record, and historical report. Commands and paths for code, tests, demos, and benchmarks in the archived documents are relative to the repository root. [Archive](archive/assignment2.1/), [Original README](archive/assignment2.1/README.md), [Report PDF](archive/assignment2.1/report/NumCompute-report.pdf), [Report DOCX](archive/assignment2.1/report/NumCompute-report.docx)
 
-## 最终交付清单
+## Deliverables
 
-- 完整的 `numcompute_stream/`、README 和至少 30 项有意义的 2.2 单元测试。
-- 可执行的 `demo/stream_demo.ipynb`，演示 CSV 分批读取、增量训练、指标和绘图。
-- `benchmark/` 中可复现的循环与向量化比较，以及不同 `buffer_size` 的实测结果。
-- 最多 4 页的 PDF 技术报告和最多 5 分钟的演示视频。
-- 在个人 fork 的 `raven/assignment2.2` 分支开发，`main` 保留原始小组代码。
+- The complete `numcompute_stream/` package, README, and at least 30 substantive Assignment 2.2 unit tests.
+- An executable `demo/stream_demo.ipynb` that demonstrates batched CSV input, incremental training, metrics, and plotting.
+- Reproducible loop and vectorized benchmarks, plus measured results for multiple `buffer_size` settings in `benchmark/`.
+- A technical report of at most four pages and a demonstration video of at most five minutes.
+- The work lives on `raven/assignment2.2` in the personal fork. `main` retains the original group project.
