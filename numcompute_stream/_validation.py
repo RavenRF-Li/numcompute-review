@@ -27,18 +27,26 @@ def numeric_array(
         raise type(exc)(f"{name}: {exc}") from exc
 
 
-def feature_matrix(values, *, expected_width=None):
-    """Validate a two-dimensional matrix of finite float64 features."""
-    X = numeric_array(
-        values, name="X", ndim=2, nonempty=False, check_values=False
-    )
+def check_feature_width(X, *, expected_width):
+    """Check the width of a two-dimensional feature array."""
     if X.shape[1] == 0:
         raise ValueError("X must have at least one feature column")
     if expected_width is not None and X.shape[1] != expected_width:
         raise ValueError(f"X must have {expected_width} features, got shape {X.shape}")
+
+
+def feature_matrix(values, *, expected_width=None, allow_nan=False):
+    """Validate a two-dimensional float64 matrix, optionally allowing NaN."""
+    X = numeric_array(
+        values, name="X", ndim=2, nonempty=False, check_values=False
+    )
+    check_feature_width(X, expected_width=expected_width)
     with np.errstate(over="ignore"):
         X = X.astype(np.float64, copy=False)
-    if not np.isfinite(X).all():
+    if allow_nan:
+        if np.isinf(X).any():
+            raise ValueError("X contains infinity or values outside the float64 range")
+    elif not np.isfinite(X).all():
         raise ValueError("X contains NaN, infinity or values outside the float64 range")
     return X
 

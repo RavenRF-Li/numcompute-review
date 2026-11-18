@@ -3,8 +3,8 @@
 NumCompute-Stream 是一个模块化的流式分类框架。项目目标是从零实现一棵 NumPy 决策树，通过 `partial_fit` 接收数据批次，在缓冲达标时用整个缓冲区重训。
 
 - `numcompute/` 是 Assignment 2.1 的基础包，保留数值工具和原有接口。
-- `numcompute_stream/` 是 Assignment 2.2 的扩展包。已实现数值 CSV 分批读取、输入验证、Gini 分类树和缓冲重训。
-- 增量预处理和统计、流式指标、Pipeline、StreamTrainer、绘图，以及 2.2 的 demo 和 benchmark 仍待实现。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
+- `numcompute_stream/` 是 Assignment 2.2 的扩展包。已实现数值 CSV 分批读取、输入验证、Gini 分类树、缓冲重训、增量预处理和流式统计。
+- 流式指标、Pipeline、StreamTrainer、绘图，以及 2.2 的 demo 和 benchmark 仍待实现。现有 `demo/` 和 `benchmark/results.json` 保存 2.1 示例和测量结果。
 
 ## 运行与测试
 
@@ -39,12 +39,29 @@ print(tree.classes_.tolist(), tree.predict_proba([[3]]).tolist())  # ['high', 'l
 PY
 ```
 
+预处理快照固定了数值变换和输出列。下面用两批数据更新混合列预处理器，并对同一行比较快照与当前变换。
+
 ```sh
-# Assignment 2.2 数据入口和决策树测试
+conda run --no-capture-output -n aiml python -B - <<'PY'
+from numcompute_stream import TabularPreprocessor
+
+prep = TabularPreprocessor(numeric_columns=[0], categorical_columns=[1])
+prep.partial_fit([[0, 1], [2, 1]])
+frozen = prep.snapshot()
+prep.partial_fit([[4, 2]])
+print(frozen.transform([[2, 2]]).tolist())  # [[1.0, 0.0]]
+print(prep.transform([[2, 2]]).tolist())    # [[0.0, 0.0, 1.0]]
+PY
+```
+
+`StreamingStats(bin_edges=...)` 按列累计均值、方差和固定箱直方图，通过 `result(q=0.5)` 查询精确分位数。精确分位数保留历史样本，内存随累计行数增长。
+
+```sh
+# Assignment 2.2 当前全部测试
 conda run -n aiml python -B -m unittest discover -s tests -p 'test_stream_*.py' -v
 
 # Assignment 2.1 回归测试
-conda run -n aiml python -B -m pytest -p no:cacheprovider tests --ignore=tests/test_stream_io.py --ignore=tests/test_stream_tree.py
+conda run -n aiml python -B -m pytest -p no:cacheprovider tests --ignore-glob='tests/test_stream_*.py'
 
 # 两套测试一起运行
 conda run -n aiml python -B -m pytest -p no:cacheprovider tests

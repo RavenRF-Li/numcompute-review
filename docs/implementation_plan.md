@@ -21,7 +21,7 @@
 | CSV I/O | `numcompute/io.py` 的 `load_csv` 用 `np.genfromtxt` 一次读入数值数据，处理 header、delimiter、dtype 和缺失值。`iter_csv_chunks` 用 `islice` 分批调用读取逻辑，检查跨批列数，跳过空批。`tests/test_io_preprocessing.py` 覆盖尾批、缺失、列数变化。 | **直接复用**两个读取器，在新 `io.py` 重新导出。**新增**带标签列的惰性包装，保留特征 NaN，检查标签和列索引。初版使用数值 CSV，类别用数值编码。 |
 | 数值预处理 | `numcompute/preprocessing.py` 的 `StandardScaler.fit` 用 `nanmean/nanstd` 重算整批，常量列使用 scale 1。`SimpleImputer.fit` 支持 mean、median、constant。两者的统计拟合均拒绝全 NaN 列。`MinMaxScaler` 也是批量拟合。 | **改造后复用**标准化及 `np.where` 填补公式，原有类保留。新类用 `RunningStats` 累计，均值填补支持全缺失列的 fallback。`MinMaxScaler` 及 median 填补留在旧包。 |
 | 编码 | 同文件 `OneHotEncoder.fit` 对 `(feature, category)` 去重排序，按原列分组；`transform` 使用广播匹配和 `logical_or.reduceat` 检查未知类别。再次拟合可能移动既有列。`tests/test_io_preprocessing.py` 重复声明同名 `TestOneHotEncoder`，Python 只保留后一次定义供收集。 | **改造后复用**向量化匹配思路，**新增**全局只追加的列映射，未知检查按原列聚合。把跨批列稳定性纳入新测试。 |
-| 统计 | `numcompute/stats.py` 的 `RunningStats.update/merge/copy` 已支持分批矩估计和 NaN 策略。现有 `histogram` 展平后单次计数，`quantile` 对传入数组单次归约。 `tests/test_stats_metrics.py` 对比不等长分批与批量矩，并覆盖 merge；`tests/test_stats_metrics_edges.py` 有方差精度边界。 | **直接复用** `RunningStats` 的累计计算、`histogram` 的固定边缘计数与 `quantile` 的精确归约。**新增** `update_stats`、按列直方图计数和原始分位数样本管理。 |
+| 统计 | `numcompute/stats.py` 的 `RunningStats.update/merge/copy` 已支持分批矩估计和 NaN 策略。现有 `histogram` 展平后单次计数，`quantile` 对传入数组单次归约。 `tests/test_stats_metrics.py` 对比不等长分批与批量矩，并覆盖 merge；`tests/test_stats_metrics_edges.py` 有方差精度边界。 | **直接复用** `RunningStats` 的累计计算与 `quantile` 的精确归约。**新增** `update_stats`、按列调用同一 NumPy 直方图 kernel 及分位数样本管理。固定边缘在构造时统一验证。 |
 | 指标 | `numcompute/metrics.py` 中 `confusion_matrix` 支持显式标签顺序，内部用 `bincount`；accuracy、precision、recall、F1 均从输入批计算。`roc_auc_score` 是精确二分类，合并同分，单一真实类别会报错。现有测试覆盖顺序、平局和未定义的分母。 | **直接复用**显式标签顺序的混淆矩阵和二分类 AUC kernel。**新增**累加和逐样本 rolling window，基于累计计数算比率，以 OvR 方式复用 AUC。 |
 | Pipeline | `numcompute/pipeline.py` 的 `Transformer`、`Estimator`、`Pipeline.fit/predict`、`FeatureUnion.fit/transform` 定义命名、保行和复制语义。旧步骤原地拟合，没有 `partial_fit` 或快照。`tests/test_pipeline.py` 和 `tests/test_optim_pipeline_utils.py` 用替身测试组合。 | **新增**流式 Pipeline。沿用命名步骤、保行与输入保护约定，避免继承旧类的就地拟合与状态。可复用旧 `numcompute/utils.py:iter_batches` 生成内存中的 demo/benchmark 切片。 |
 | 输入验证 | `numcompute/_validation.py` 的 `real_array` 检查实数、维数、NaN/Inf，`matrix` 检查二维并转 float64，`integer` 拒绝布尔整数；`fitted` 的检查绑定旧 transformer 的属性。旧 Pipeline 自有 `_matrix` 并把宽度决定权交给步骤。 | **直接复用**基础数值与整数检查，通过新包内部适配层集中旧私有导入。**新增**带参数名的错误、类别 dtype、行数匹配、宽度、转换后溢出与各阶段状态验证。 |
@@ -38,10 +38,10 @@
 | --- | --- |
 | `__init__.py`、`_validation.py` | 前者导出主要组件。后者是私有的数组、整数、标签空间、概率与拟合状态检查。统一报告输入名、期望形状和实际形状。 |
 | `io.py` | 重新导出 `load_csv` 和 `iter_csv_chunks`。`iter_supervised_csv(path, *, target_col, chunk_size=1000, delimiter=",", skip_header=0)` 逐批返回 `(X, y)`，有序移出目标列，允许 Python 风格负索引。每个数据批至少两列，特征 NaN 保留，非有限标签或 Inf 特征报错。沿用旧数值读取器的默认精度，`X` 和 `y` 均为 float64。 |
-| `preprocessing.py` | `StandardScaler()`、`SimpleImputer(fill_value=0.0)` 和 `OneHotEncoder(handle_unknown="ignore")` 提供 `fit(X)`、`partial_fit(X_chunk)`、`transform(X)`；前两者输出 `(n,d)`，后者输出 `(n,p)`。Scaler 保存每列 count、mean、M2 和 scale；Imputer 保存每列观测计数和当前填补值；Encoder 保存只追加的类别映射及输出宽度。 `TabularPreprocessor(numeric_columns, categorical_columns, *, fill_value=0.0)` 按列分支，输出 `(n,d_num+p)`，支持相同接口及 `snapshot()`，列列表有序、互斥，合计至少一列。 |
+| `preprocessing.py` | **已实现。** `StandardScaler()`、`SimpleImputer(fill_value=0.0)`、`OneHotEncoder(handle_unknown="ignore")` 和 `TabularPreprocessor(numeric_columns, categorical_columns, *, fill_value=0.0)` 提供 `fit(X)`、`partial_fit(X_chunk)`、`transform(X)`。前两者输出 `(n,d)`，Encoder 输出 `(n,p)`，组合器输出 `(n,d_num+p)`。数值累计状态为每列 count、mean 和 M2，scale 和填补值从状态计算。Encoder 只追加类别列。Scaler 和组合器提供 `snapshot()`；组合器的列索引为有序、互斥的非负整数，至少选一列。 |
 | `tree.py` | **已实现。** `DecisionTreeClassifier(max_depth=8, min_samples_split=2, max_features=None, buffer_size=128, random_state=0)`，使用 Gini。`fit(X,y)`、`partial_fit(X_chunk,y_chunk)` 返回 self。`predict(X)` 输出 `(n,)`，`predict_proba(X)` 输出 `(n,k)`，列 `j` 对应最近训练的 `classes_[j]`，每行总和为 1。叶概率为训练窗口内该叶的类频率。只读状态含 `is_fitted_`、`pending_samples_`、`retrain_count_` 和 `last_train_samples_`。 |
 | `pipeline.py` | `Pipeline(steps)` 接收唯一命名的步骤和末端 `DecisionTreeClassifier`。中间允许一个自带 `snapshot()` 的增量预处理步骤（可组合数值和类别列），前后可接确定性、保行的无状态 `transform`，或仅用树。`fit`、`partial_fit`、`predict`、`predict_proba` 对外形状同树；`transform(X)` 返回当前已发布快照的 `(n,p)`。维护原始输入宽度、学习中的预处理状态、发布状态、原始样本缓冲和重训计数。 |
-| `stats.py` | `StreamingStats(*, bin_edges)` 使用一组各列共用且固定的严格递增边缘。`update_stats(X_chunk)` 和 `update(X_chunk)` 是同一累计入口。`result(q=0.5, *, ddof=0)` 返回 count、mean、var 各 `(d,)`，quantile 为 `(d,)` 或 `(len(q),d)`，histogram 为 `(d,b)`，edges 为 `(b+1,)`，另有各列 underflow/overflow。`reset()` 清状态，保留边缘配置。 |
+| `stats.py` | **已实现。** `StreamingStats(*, bin_edges)` 使用一组各列共用且固定的严格递增边缘。`update_stats(X_chunk)` 和 `update(X_chunk)` 是同一累计入口。`result(q=0.5, *, ddof=0)` 返回 count、mean、var 各 `(d,)`，quantile 为 `(d,)` 或 `(len(q),d)`，histogram 为 `(d,b)`，edges 为 `(b+1,)`，另有各列 underflow/overflow。`reset()` 清状态，保留边缘配置。有首个非空批之后才可查询结果。 |
 | `metrics.py` | `ClassificationMetrics(labels, *, pos_label=None, window_size=None, zero_division=0.0)`。`update(y_true_chunk,y_pred_chunk, *, y_proba=None)` 接收等长 `(n,)` 和可选的 `(n,k)`，概率列按配置的 `labels` 对齐。`result(*, rolling=False)` 返回样本数、准确率、逐类 precision/recall/F1、`(k,k)` 混淆矩阵、AUC 与有概率行数；给定 `pos_label` 时返回该类的精确 OvR AUC，省略时返回已定义 OvR AUC 的宏平均和逐类结果。`reset()` 清空累计和滚动状态。 |
 | `stream.py` | `StreamTrainer(pipeline, *, labels, pos_label=None, window_size=None)`。`score_chunk(X,y)` 纯评估并返回批指标及本批预测数组（标签 `(n,)`、对齐概率 `(n,k)`），启动时返回 warmup、NaN 及零行预测。`fit_chunk(X,y)` 执行先评估后学习，返回评估结果与含本批/累计/滚动指标、样本数、评估和发布版本、重训时间及内存的摘要。日志仅保留摘要，调用方可用本批返回的预测作图。空批返回空结果，不记日志；`reset()` 恢复未训练状态并清空指标和日志，保留配置。 |
 | `visualise.py` | `plot_metric_over_time(metric_values,title,ylabel)` 接收一维时间序列，NaN 表示缺点；`compare_models(metric1,metric2,labels)` 接收等长序列与两个模型名；`plot_predictions_vs_ground_truth(y_true,y_pred)` 接收等长一维标签，共用离散类刻度。都附加仅限关键字的 `save_path=None, show=False`，返回 `(Figure, Axes)`；调用方可选择保存、显示，并负责关闭 Figure。 |
@@ -60,17 +60,23 @@
 ### 坐标一致性
 
 - Pipeline 用两套状态。学习状态在每个有效 chunk 更新，保存到目前为止的特征统计及类别字典。发布状态绑定一棵树，持有该树训练所用的只读预处理快照，快照包含填补值、均值、scale、类别键、输出列顺序和宽度。预测只读发布状态。
-- 数值分支在**同一份原始已观测值**上更新 Imputer 和 Scaler，从而避免把随时间漂移的填充值累计进 Scaler。实际变换先填补后标准化。全 NaN 列的 Imputer 使用固定 fallback，Scaler 在零观测时用中心 0、scale 1；首个观测到达后转正常统计。已观测的常量列用 scale 1。该统计约定独立于传入顺序，是针对增量学习的设计选择。
+- 组合器数值分支用**同一份原始观测的 RunningStats** 同时得到均值填补值、中心和 scale。实际变换先填补后标准化。全 NaN 列使用固定 fallback、中心 0 和 scale 1，首个观测到达后转正常统计；已观测的常量列用 scale 1。快照保存只读数值参数及该版本的类别映射，后续学习更新通过替换状态发布。
 - 缓冲始终仅存原始数据，包含原始 NaN 和类别码。达到门槛时先更新本批学习状态，再冻结候选快照；拼接并用这一份快照**重新变换所有缓冲行**，构建候选树。随后成对发布快照和树。例如旧中心为 0，新数据使中心变为 10，旧树期间 (X=5) 仍按中心 0 变换；新树和所有重训行统一按中心 10 变换。
 - Encoder 以 `(输入列号, 类别值)` 为键。每批向量化发现新键，按列索引、类别值排序后作为一个后缀追加；同一批之前的列索引永不移动。数值块固定在前，编码列固定在后。出现新类别但尚未重训时，旧快照仍产生旧宽度，未知类别在对应旧列编码为全零。重训时同一新版映射编码所有原始缓冲行，旧列意义仍在原位。独立 Encoder 可配置 `error` 且报告未知类别；Pipeline 的表格组合器使用 `ignore`，允许真实流出现新类别。
 - Pipeline 串联无状态变换和终端模型；多个依赖不同变化坐标的学习步骤须封装成定义清楚学习输入的组合器。初版的 `TabularPreprocessor` 使用独立数值/类别输入分支，避免把普通 `partial_fit + transform` 串联误当作一致性保证。代价是保留原始缓冲、复制预处理快照以及在重训时重新编码；dense one-hot 在高基数时耗内存。
+
+### 阶段 C 接入约束
+
+- Pipeline 只维护一份原始 `(X, y)` 缓冲。达到门槛时，对整个缓冲应用同一候选快照，再调用候选树的 `fit`。
+- 每次候选树 `fit` 会把树内 `retrain_count_` 设回 1。Pipeline 自己维护累计重训次数，在候选成功发布时递增。
+- 候选预处理快照与候选树成对发布。树构建失败时，保留旧发布对、已有原始缓冲和累计计数。独立 `StandardScaler` 和 `TabularPreprocessor` 已提供冻结的 `transform` 接口。
 
 ### 分裂与数值边界
 
 - 根深度为 0；`max_depth=0`、纯节点、样本数小于 `min_samples_split`、无有效正增益或常量特征时出叶。每个候选特征排序，只在相邻不同值之间评估切分；以左组最大观测值作为阈值，按 `<=` 分左边，避免算 midpoint 的溢出和舍入。区间内新值按这个明确的阈值规则路由。
 - 每个候选特征用类计数前缀和、广播及向量化 Gini 计算所有合法候选。增益 `<= 1e-12` 视作无有效分裂；候选增益距全局最大值 `<= 1e-12` 时按最小特征索引、再按最小阈值决胜。预测票数相同时选排序后最前的类别。单一类别可训练，整棵树为叶时概率仍有效。
 - `max_features=None` 用全部列；正整数 `m` 要求 `1 <= m <= p`；浮点 `f` 要求 `0 < f <= 1`，每节点用 `ceil(f*p)` 列，`p` 为当前树的变换后宽度。在每个拟分裂节点无放回抽一次，遍历候选时按特征索引排序。显式 `random_state` 为非负整数，每次完整建树重新初始化 NumPy Generator，固定左后右的节点访问顺序；相同输入、种子、配置、NumPy 环境可复现。记录种子和版本。采样特征均无法分裂时直接使用叶节点。
-- 独立树在特征转换成 float64 后拒绝 NaN、Inf 和转换溢出。极大整数特征可能因转换丢失精度；类别标签保留 NumPy dtype。Pipeline 计划在数值分支填补 NaN，在更新前拒绝特征 Inf、标签 NaN/Inf 和非法类别值。矩估计和标准化检查已观测列的非有限状态，识别溢出时抛出带阶段信息的 `ValueError`，保留旧状态。方差使用 Welford/Chan 的中心矩，对舍入导致的微小负值截零，显著负值视为计算异常。
+- 独立树在特征转换成 float64 后拒绝 NaN、Inf 和转换溢出。极大整数特征可能因转换丢失精度；类别标签保留 NumPy dtype。组合器在数值分支填补 NaN，并拒绝非有限类别码。矩估计复用 Welford/Chan 的中心矩，候选统计若出现非有限均值、非有限方差或负方差则拒绝更新，保留旧状态。标准化溢出抛出 `ValueError`。
 - 节点中候选特征逐个处理，先保存每列最大增益，再重算第一个满足平局容差的特征，选择最小合格阈值。单节点 `n` 行、`k` 类、`m` 个候选特征的时间约为 `O(m(n log n + nk))`，计数工作区约 `O(nk)`。建树用显式栈执行递归划分，逐特征处理及按节点批量预测路由保留循环。节点数据和形状依赖上一层划分，逐特征还可避免同时分配所有候选的计数数组。CSV、chunk 调度、类别映射、窗口驱逐与绘图允许必要循环；矩、掩码、计数、比较等数组运算使用 NumPy。
 
 ## 4. 统计、指标和内存
@@ -93,7 +99,7 @@
 | --- | --- |
 | 1 | **已完成。** 建立包入口，实现本阶段需要的列索引、数值及维度验证适配和 CSV 包装，并验证 T01–T03。模型状态和重置契约在对应阶段实现。 |
 | 2 | **阶段 A 已完成。** 实现独立 Gini 树和阈值缓冲重训，验证叶概率、分裂、随机性、精确达标、整批越线与失败保护。 |
-| 3 | 复用 `RunningStats` 实现增量预处理和独立 StreamingStats；验证快照、NaN、统计与列顺序。 |
+| 3 | **阶段 B 已完成。** 复用 `RunningStats` 实现增量预处理和独立 StreamingStats，验证快照、NaN、统计与列顺序。 |
 | 4 | 在树及预处理之上接 Pipeline 的原始缓冲与成对发布，验证两次重训之间的坐标。 |
 | 5 | 实现指标累计、滚动和 AUC；在 Pipeline 和指标上接 StreamTrainer，验证无泄漏时序、失败重试与日志。 |
 | 6 | 接绘图与 demo，新增两个 benchmark 入口并实际测量；运行旧套件与 2.2 测试，验证安装。 |
@@ -118,7 +124,13 @@ T01–T03 共 **3 项通过**（0.012 s）。旧套件 **642 项通过，0 项�
 
 新增 `numcompute_stream/tree.py` 与 `tests/test_stream_tree.py`，扩展输入验证与包导出。候选阈值使用类别计数前缀和批量计算 Gini 增益，建树和预测均按节点遍历。训练成功后才发布树与类别并清空缓冲。未训练时直接预测报 `RuntimeError`，合法空增量不改变状态，已训练时零行推理返回正确形状。
 
-在同一 `aiml` 环境分别运行树测试 **22 项通过**、流式 I/O 测试 **3 项通过**、旧回归 **642 项通过**。全量合跑 **667 项通过，0 项失败**，仍有 4 条旧 NumPy 配置输出警告。树测试包括 T04–T22，以及重训失败重试、大整数标签和独立多类 Gini 参考计算，完整命令见 README。实施顺序第 3–7 项待执行。
+在同一 `aiml` 环境分别运行树测试 **22 项通过**、流式 I/O 测试 **3 项通过**、旧回归 **642 项通过**。全量合跑 **667 项通过，0 项失败**，仍有 4 条旧 NumPy 配置输出警告。树测试包括 T04–T22，以及重训失败重试、大整数标签和独立多类 Gini 参考计算，完整命令见 README。
+
+### 阶段 B 完成记录
+
+新增 `preprocessing.py`、`stats.py` 和两个对应测试文件。各组件先验证候选状态再赋值。快照只保存变换参数，类别映射为只读且按版本替换。组合器接受数值表，类别码统一为 float64，大整数码可能合并；直接使用独立 Encoder 时保留原有类别 dtype。直方图为累积固定箱，精确分位数保留 `O(Nd)` 历史。极端有限输入如果使浮点矩溢出，会显式报错。
+
+在同一 `aiml` 环境运行预处理 **12 项**和统计 **4 项**，全部通过。全量套件 **683 项通过，0 项失败**，含阶段 B 16 项、之前的 2.2 测试 25 项、2.1 回归 642 项。警告是既有的 4 条 NumPy 配置输出。实施顺序第 4–7 项待执行。
 
 ## 6. 需求覆盖与待确认
 
